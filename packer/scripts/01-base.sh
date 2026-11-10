@@ -8,14 +8,14 @@ export DEBIAN_FRONTEND=noninteractive
 
 # The Debian cloud image ships with an unprivileged "admin" account. The
 # harness logs in as that user, so it needs passwordless sudo.
-if ! grep -q '^admin ALL=' /etc/sudoers 2>/dev/null; then
-    echo 'admin ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-lab-admin
-    chmod 440 /etc/sudoers.d/90-lab-admin
+if ! sudo grep -q '^admin ALL=' /etc/sudoers 2>/dev/null; then
+    echo 'admin ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/90-lab-admin >/dev/null
+    sudo chmod 440 /etc/sudoers.d/90-lab-admin
 fi
 
-apt-get update
-apt-get -y upgrade
-apt-get install -y \
+sudo apt-get update
+sudo apt-get -y upgrade
+sudo apt-get install -y \
     ca-certificates curl wget gnupg \
     chrony qemu-guest-agent \
     initramfs-tools lvm2
@@ -33,8 +33,8 @@ apt-get install -y \
 #                               interface until the bootstrap switches to
 #                               ifupdown2.
 # -----------------------------------------------------------------------------
-mkdir -p /etc/cloud/cloud.cfg.d
-cat > /etc/cloud/cloud.cfg.d/99-pve-lab.cfg << 'EOF'
+sudo mkdir -p /etc/cloud/cloud.cfg.d
+sudo tee /etc/cloud/cloud.cfg.d/99-pve-lab.cfg >/dev/null << 'EOF'
 manage_etc_hosts: false
 preserve_hostname: true
 network:
@@ -42,14 +42,14 @@ network:
 EOF
 
 # Time synchronisation matters for corosync and the cluster certificates.
-cat > /etc/chrony/chrony.conf << 'EOF'
+sudo tee /etc/chrony/chrony.conf >/dev/null << 'EOF'
 pool 169.254.169.123 iburst minpoll 4 maxpoll 4
 driftfile /var/lib/chrony/chrony.drift
 makestep 1.0 3
 rtcsync
 logdir /var/log/chrony
 EOF
-systemctl enable chrony
-systemctl restart chrony
+sudo systemctl enable chrony
+sudo systemctl restart chrony
 
 echo "base setup complete"
