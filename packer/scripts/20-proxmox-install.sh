@@ -7,8 +7,8 @@ set -euxo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 # Preseed postfix so the install does not stop on a dialog.
-echo "postfix postfix/main_mailer_type select Local only" | debconf-set-selections
-echo "postfix postfix/mailname string proxmox.seminar.local" | debconf-set-selections
+echo "postfix postfix/main_mailer_type select Local only" | sudo debconf-set-selections
+echo "postfix postfix/mailname string proxmox.seminar.local" | sudo debconf-set-selections
 
 # ifupdown2 replaces ifupdown and gives us ifreload -a for live changes.
 # It is installed here but networking.service stays DISABLED in the AMI: until

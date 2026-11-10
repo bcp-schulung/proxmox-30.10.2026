@@ -106,8 +106,8 @@ build {
 
   provisioner "shell" {
     inline = [
-      "proxmox-backup-manager versions",
-      "systemctl is-active proxmox-backup.service proxmox-backup-proxy.service",
+      "sudo proxmox-backup-manager versions",
+      "sudo systemctl is-active proxmox-backup.service",
     ]
     timeout = "10m"
   }

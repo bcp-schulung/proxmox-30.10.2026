@@ -396,8 +396,11 @@ aws_instance_public_ip() {
 
 aws_instance_eni() {
     # aws_instance_eni <instance-id> <device-index> -> eni-id
+    #
+    # The network interfaces live under Reservations[].Instances[]. The query
+    # has to walk through the instance, not through the reservation.
     aws_cli ec2 describe-instances --region "${AWS_REGION}" --instance-ids "$1" \
-        --query "Reservations[0].NetworkInterfaces[?Attachment.DeviceIndex==\`$2\`].NetworkInterfaceId | [0]" \
+        --query "Reservations[0].Instances[0].NetworkInterfaces[?Attachment.DeviceIndex==\`$2\`].NetworkInterfaceId | [0]" \
         --output text 2>/dev/null | sed 's/^None$//'
 }
 
@@ -417,15 +420,22 @@ aws_eni_subnet() {
 }
 
 aws_instance_root_volume() {
+    # The root device name comes from the AMI. The Debian cloud image uses
+    # /dev/xvda, but it is read from the instance so that the lookup works
+    # with any base image.
+    local device
+    device="$(aws_cli ec2 describe-instances --region "${AWS_REGION}" --instance-ids "$1" \
+        --query 'Reservations[0].Instances[0].RootDeviceName' --output text 2>/dev/null | sed 's/^None$//')"
+    [ -n "${device}" ] || device="/dev/xvda"
     aws_cli ec2 describe-instances --region "${AWS_REGION}" --instance-ids "$1" \
-        --query 'Reservations[0].BlockDeviceMappings[?DeviceName==\`/dev/sda1\`].Ebs.VolumeId | [0]' \
+        --query "Reservations[0].Instances[0].BlockDeviceMappings[?DeviceName==\`${device}\`].Ebs.VolumeId | [0]" \
         --output text 2>/dev/null | sed 's/^None$//'
 }
 
 aws_instance_volume_for_device() {
     # aws_instance_volume_for_device <instance-id> <device-name>
     aws_cli ec2 describe-instances --region "${AWS_REGION}" --instance-ids "$1" \
-        --query "Reservations[0].BlockDeviceMappings[?DeviceName==\`$2\`].Ebs.VolumeId | [0]" \
+        --query "Reservations[0].Instances[0].BlockDeviceMappings[?DeviceName==\`$2\`].Ebs.VolumeId | [0]" \
         --output text 2>/dev/null | sed 's/^None$//'
 }
 

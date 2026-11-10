@@ -120,7 +120,7 @@ build {
   # 3. Reboot into the Proxmox kernel. The connection drops on purpose -
   # expect_disconnect tells Packer that this is expected.
   provisioner "shell" {
-    inline           = ["echo 'Rebooting into the Proxmox kernel...'", "systemctl reboot || true"]
+    inline           = ["echo 'Rebooting into the Proxmox kernel...'", "sudo systemctl reboot || true"]
     expect_disconnect = true
     timeout          = "20m"
   }
