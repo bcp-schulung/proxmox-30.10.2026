@@ -165,9 +165,55 @@ preflight_tools() {
     log_ok "All required tools present"
 }
 
+# The AWS CLI v2 "login" flow stores temporary credentials in a cache file
+# under ~/.aws/login/cache and references them through the 'login_session'
+# key in ~/.aws/config. The CLI understands that, but other AWS tools - Packer
+# in particular - do not, and they fail with "No valid credential sources
+# found". This exports the cached credentials as the standard environment
+# variables so that every child process can use them.
+aws_export_login_credentials() {
+    [ -n "${AWS_ACCESS_KEY_ID:-}" ] && return 0
+
+    local cache
+    cache="$(ls -1t "${HOME}/.aws/login/cache/"*.json 2>/dev/null | head -1)"
+    if [ -z "${cache}" ]; then
+        return 1
+    fi
+
+    local access secret token expires
+    access="$(jq -r '.accessToken.accessKeyId // empty' "${cache}" 2>/dev/null)"
+    secret="$(jq -r '.accessToken.secretAccessKey // empty' "${cache}" 2>/dev/null)"
+    token="$(jq -r '.accessToken.sessionToken // empty' "${cache}" 2>/dev/null)"
+    expires="$(jq -r '.accessToken.expiresAt // empty' "${cache}" 2>/dev/null)"
+
+    [ -n "${access}" ] && [ -n "${secret}" ] && [ -n "${token}" ] || return 1
+
+    export AWS_ACCESS_KEY_ID="${access}"
+    export AWS_SECRET_ACCESS_KEY="${secret}"
+    export AWS_SESSION_TOKEN="${token}"
+
+    if [ -n "${expires}" ]; then
+        local now expiry_epoch
+        now="$(date -u +%s)"
+        expiry_epoch="$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "${expires}" +%s 2>/dev/null || date -u -d "${expires}" +%s 2>/dev/null || echo "${now}")"
+        if [ "${expiry_epoch}" -le $(( now + 300 )) ]; then
+            log_warn "The cached AWS credentials expire at ${expires}."
+            log_warn "Run 'aws login' if a long build fails with an access error."
+        fi
+    fi
+
+    log_debug "Exported the cached AWS credentials for other tools"
+    return 0
+}
+
 # Preflight: verify AWS credentials work and the region is reachable.
 preflight_aws() {
     local identity
+
+    # Make the credentials usable by tools that do not understand the CLI's
+    # login_session provider.
+    aws_export_login_credentials || true
+
     # The ERR trap is disabled inside the subshell so that the expected
     # failure does not print a confusing stack trace.
     if ! identity="$( { trap - ERR; aws_cli sts get-caller-identity --output json; } 2>&1 )"; then

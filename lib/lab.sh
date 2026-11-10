@@ -353,13 +353,15 @@ lab_build_ami() {
     if ! packer init "${hcl}" >/dev/null 2>&1; then
         log_warn "packer init failed - continuing, the plugin may already be installed"
     fi
+    # Packer's build log goes to stdout, which would otherwise be captured
+    # by the command substitution this function runs in.
     if ! packer build \
         -var "region=${PACKER_AMI_REGION}" \
         -var "base_ami=${base_ami}" \
         -var "${var_name}=${ami_name}" \
         -var "root_volume_size=${PVE_ROOT_VOLUME_SIZE}" \
         -var "ssh_key_path=${PVE_SSH_KEY_PATH}" \
-        "${hcl}"; then
+        "${hcl}" >&2; then
         die "Packer build for the ${kind} AMI failed."
     fi
 
