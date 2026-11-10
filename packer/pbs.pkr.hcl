@@ -45,17 +45,15 @@ source "amazon-ebs" "pbs" {
   instance_type = var.build_instance_type
   ami_name      = var.pbs_ami_name
 
-  root_volume_type = "gp3"
-  root_volume_size = var.root_volume_size
-  encrypt_boot     = true
+  encrypt_boot = true
 
   ssh_username         = "root"
   ssh_private_key_file = var.ssh_key_path
   ssh_timeout          = "20m"
 
   tags = {
-    Name   = var.pbs_ami_name
-    LabTag = "pve-advanced-seminar-lab"
+    Name    = var.pbs_ami_name
+    LabTag  = "pve-advanced-seminar-lab"
     LabRole = "pbs-ami"
   }
 
@@ -64,6 +62,15 @@ source "amazon-ebs" "pbs" {
     LabTag  = "pve-advanced-seminar-lab"
     LabRole = "pbs-ami-build"
   }
+
+  # The root volume of the Debian cloud image.
+  launch_block_device_mappings {
+    device_name           = "/dev/xvda"
+    volume_size           = var.root_volume_size
+    volume_type           = "gp3"
+    delete_on_termination = true
+    encrypted             = true
+  }
 }
 
 build {
@@ -71,18 +78,15 @@ build {
   sources = ["source.amazon-ebs.pbs"]
 
   provisioner "shell" {
-    label = "base"
-    script = "${path.root}/packer/scripts/01-base.sh"
+    script = "${path.root}/scripts/01-base.sh"
   }
 
   provisioner "shell" {
-    label   = "pbs-install"
-    script  = "${path.root}/packer/scripts/40-pbs-install.sh"
+    script  = "${path.root}/scripts/40-pbs-install.sh"
     timeout = "30m"
   }
 
   provisioner "shell" {
-    label = "verify"
     inline = [
       "proxmox-backup-manager versions",
       "systemctl is-active proxmox-backup.service proxmox-backup-proxy.service",
@@ -91,7 +95,7 @@ build {
   }
 
   post-processor "manifest" {
-    output     = "${path.root}/packer/manifest-pbs.json"
+    output     = "${path.root}/manifest-pbs.json"
     strip_path = true
   }
 }
