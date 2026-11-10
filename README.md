@@ -14,6 +14,7 @@ Everything is driven by four scripts:
 | `debug.sh` | Diagnose every layer (AWS, network, node, cluster, guest) and write a report to `logs/`. |
 | `shutdown.sh` | Stop the lab for the night. Guests are shut down gracefully, instances are stopped, **nothing is destroyed**. |
 | `clean.sh` | Remove the lab. `--scope cluster` resets the cluster, `--scope aws` removes the AWS resources as well. |
+| `destroy.sh` | Nuke the entire setup - every instance, volume, network resource, image and the local state. One command, no scope to think about. |
 
 ---
 
@@ -88,7 +89,7 @@ cp .env.example .env && $EDITOR .env
 ./shutdown.sh              # stop everything, keep it for tomorrow
 
 # 6. When the seminar is over
-./clean.sh --scope all     # remove the cluster AND the AWS resources
+./destroy.sh               # remove EVERYTHING - cluster and AWS resources
 ```
 
 `provision.sh` takes roughly 25–40 minutes, most of it the two Packer builds.
@@ -155,12 +156,33 @@ Walks six layers and prints `PASS` / `WARN` / `FAIL` per check. The full report 
 
 ### `clean.sh`
 
+Scoped teardown - use it when you want to keep part of the lab.
+
 ```bash
 ./clean.sh                       # reset the cluster, keep the instances running
 ./clean.sh --scope aws           # remove the AWS resources as well
 ./clean.sh --scope all           # everything
 ./clean.sh --scope all --dry-run # show what would happen
 ```
+
+### `destroy.sh`
+
+The full teardown. It removes the guests, the cluster configuration, every EC2
+instance (including orphans from a failed Packer build), every EBS volume, every
+network interface, security group, route table, NAT gateway, elastic IP, internet
+gateway, subnet, the VPC, the key pair, both AMIs with their snapshots, and the
+local state including the generated credentials.
+
+```bash
+./destroy.sh --dry-run    # show the manifest, change nothing
+./destroy.sh              # destroy everything, with a confirmation
+./destroy.sh --yes        # destroy everything without asking
+./destroy.sh --keep-amis  # keep the AMIs so the next run starts faster
+```
+
+Resources are located by their `LabTag`, so leftovers from an interrupted run are
+removed as well - the state file is not required. The script finishes by verifying
+that nothing tagged with the lab tag is left in the account.
 
 ## AWS-specific design decisions
 
@@ -211,7 +233,7 @@ removes everything.
 ## Repository layout
 
 ```
-provision.sh  debug.sh  shutdown.sh  clean.sh   the four entry points
+provision.sh  debug.sh  shutdown.sh  clean.sh  destroy.sh   the entry points
 config/default.env                            versioned defaults
 .env.example                                  template for machine specific settings
 lib/                                          common, config, state, aws, ssh, pve, lab

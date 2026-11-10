@@ -158,6 +158,13 @@ aws_natgw_create() {
     public_subnet="$(aws_subnet_id "${SUBNET_PUBLIC_CIDR}")"
     eip="$(aws_cli ec2 allocate-address --region "${AWS_REGION}" \
         --domain "vpc" --query "AllocationId" --output text)"
+
+    # Tag the address so that destroy.sh can find and release it.
+    aws_cli ec2 create-tags --region "${AWS_REGION}" --resources "${eip}" \
+        --tags "Key=Name,Value=${LAB_TAG}-natgw-eip" \
+               "Key=LabTag,Value=${LAB_TAG}" \
+               "Key=LabRole,Value=eip" >/dev/null 2>&1 || true
+
     nat_id="$(aws_cli ec2 create-nat-gateway --region "${AWS_REGION}" \
         --subnet-id "${public_subnet}" --allocation-id "${eip}" \
         --query "NatGateway.NatGatewayId" --output text)"
@@ -471,11 +478,77 @@ aws_delete_snapshots_of_ami() {
 aws_lab_instances() {
     aws_cli ec2 describe-instances --region "${AWS_REGION}" \
         --filters "Name=tag:LabTag,Values=${LAB_TAG}" \
-        --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null | tr '\t' '\n'
+        --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null | tr '\t' '\n' || true
 }
 
 aws_lab_volumes() {
     aws_cli ec2 describe-volumes --region "${AWS_REGION}" \
         --filters "Name=tag:LabTag,Values=${LAB_TAG}" \
-        --query 'Volumes[].VolumeId' --output text 2>/dev/null | tr '\t' '\n'
+        --query 'Volumes[].VolumeId' --output text 2>/dev/null | tr '\t' '\n' || true
+}
+
+aws_lab_enis() {
+    aws_cli ec2 describe-network-interfaces --region "${AWS_REGION}" \
+        --filters "Name=tag:LabTag,Values=${LAB_TAG}" \
+        --query 'NetworkInterfaces[].NetworkInterfaceId' --output text 2>/dev/null | tr '\t' '\n' || true
+}
+
+aws_lab_sgs() {
+    aws_cli ec2 describe-security-groups --region "${AWS_REGION}" \
+        --filters "Name=tag:LabTag,Values=${LAB_TAG}" \
+        --query 'SecurityGroups[].GroupId' --output text 2>/dev/null | tr '\t' '\n' || true
+}
+
+aws_lab_subnets() {
+    aws_cli ec2 describe-subnets --region "${AWS_REGION}" \
+        --filters "Name=tag:LabTag,Values=${LAB_TAG}" \
+        --query 'Subnets[].SubnetId' --output text 2>/dev/null | tr '\t' '\n' || true
+}
+
+aws_lab_route_tables() {
+    aws_cli ec2 describe-route-tables --region "${AWS_REGION}" \
+        --filters "Name=tag:LabTag,Values=${LAB_TAG}" \
+        --query 'RouteTables[].RouteTableId' --output text 2>/dev/null | tr '\t' '\n' || true
+}
+
+aws_lab_natgws() {
+    aws_cli ec2 describe-nat-gateways --region "${AWS_REGION}" \
+        --filters "Name=tag:LabTag,Values=${LAB_TAG}" \
+        --query 'NatGateways[].NatGatewayId' --output text 2>/dev/null | tr '\t' '\n' || true
+}
+
+aws_lab_igws() {
+    aws_cli ec2 describe-internet-gateways --region "${AWS_REGION}" \
+        --filters "Name=tag:LabTag,Values=${LAB_TAG}" \
+        --query 'InternetGateways[].InternetGatewayId' --output text 2>/dev/null | tr '\t' '\n' || true
+}
+
+aws_lab_vpcs() {
+    aws_cli ec2 describe-vpcs --region "${AWS_REGION}" \
+        --filters "Name=tag:LabTag,Values=${LAB_TAG}" \
+        --query 'Vpcs[].VpcId' --output text 2>/dev/null | tr '\t' '\n' || true
+}
+
+aws_lab_amis() {
+    aws_cli ec2 describe-images --region "${AWS_REGION}" --owners self \
+        --filters "Name=tag:LabTag,Values=${LAB_TAG}" \
+        --query 'Images[].ImageId' --output text 2>/dev/null | tr '\t' '\n' || true
+}
+
+aws_lab_snapshots() {
+    aws_cli ec2 describe-snapshots --region "${AWS_REGION}" --owner-ids self \
+        --filters "Name=tag:LabTag,Values=${LAB_TAG}" \
+        --query 'Snapshots[].SnapshotId' --output text 2>/dev/null | tr '\t' '\n' || true
+}
+
+aws_lab_eips() {
+    aws_cli ec2 describe-addresses --region "${AWS_REGION}" \
+        --filters "Name=tag:LabTag,Values=${LAB_TAG}" \
+        --query 'Addresses[].AllocationId' --output text 2>/dev/null | tr '\t' '\n' || true
+}
+
+aws_lab_keypairs() {
+    aws_cli ec2 describe-key-pairs --region "${AWS_REGION}" \
+        --filters "Name=tag:LabTag,Values=${LAB_TAG}" \
+        --query 'KeyPairs[].KeyName' --output text 2>/dev/null | tr '\t' '\n' || true
 }

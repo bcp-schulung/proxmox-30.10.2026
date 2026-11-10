@@ -60,7 +60,9 @@ source "amazon-ebs" "pbs" {
   }
 
   run_tags = {
-    Name = "packer-build-pbs"
+    Name    = "packer-build-pbs"
+    LabTag  = "pve-advanced-seminar-lab"
+    LabRole = "pbs-ami-build"
   }
 }
 

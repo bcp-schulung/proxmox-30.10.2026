@@ -67,6 +67,8 @@ Examples:
   ./clean.sh                        reset the cluster, keep the infrastructure
   ./clean.sh --scope aws            remove everything from AWS
   ./clean.sh --scope all --dry-run  show what the full cleanup would do
+
+For a complete teardown without thinking about scopes, use ./destroy.sh instead.
 EOF
 }
 
@@ -98,77 +100,6 @@ run() {
 }
 
 # --- scope 1: the cluster and its guests -------------------------------------
-
-destroy_guests() {
-    log_step "Destroying the guests"
-
-    local node priv
-    for node in $(lab_node_list); do
-        priv="$(state_get ".instances.${node}.private_ip")"
-        if ! ssh_exec_q "${priv}" "true"; then
-            log_warn "${node}: not reachable - its guests cannot be destroyed from here"
-            continue
-        fi
-
-        local vmid
-        for vmid in $(ssh_exec "${priv}" "qm list 2>/dev/null | tail -n +2 | awk '{print \$1}'"); do
-            [ -n "${vmid}" ] || continue
-            log_info "${node}: destroying VM ${vmid}"
-            run ssh_exec_q "${priv}" "qm destroy ${vmid} --purge 1 --destroy-unreferenced-disks 1"
-        done
-
-        local ctid
-        for ctid in $(ssh_exec "${priv}" "pct list 2>/dev/null | tail -n +2 | awk '{print \$1}'"); do
-            [ -n "${ctid}" ] || continue
-            log_info "${node}: destroying container ${ctid}"
-            run ssh_exec_q "${priv}" "pct destroy ${ctid} --purge 1"
-        done
-    done
-}
-
-reset_cluster() {
-    log_step "Resetting the cluster configuration"
-
-    local node priv last=""
-    for node in $(lab_node_list); do
-        priv="$(state_get ".instances.${node}.private_ip")"
-        ssh_exec_q "${priv}" "true" || continue
-        log_info "${node}: leaving the cluster"
-        run ssh_exec_q "${priv}" "pvecm leave --force"
-        last="${priv}"
-    done
-
-    # Wipe the shared configuration on the first node so that the next
-    # 'pvecm create' starts from a clean slate.
-    if [ -n "${last}" ]; then
-        log_info "Removing the stored cluster configuration"
-        run ssh_exec_q "${last}" "rm -f /etc/pve/corosync.conf /etc/pve/cluster/ /etc/pve/nodes/*/corosync.conf 2>/dev/null; true"
-    fi
-
-    # The storage definitions live in the cluster configuration too.
-    local first_priv
-    first_priv="$(state_get ".instances.$(lab_node_list | head -1).private_ip")"
-    if ssh_exec_q "${first_priv}" "true"; then
-        run ssh_exec_q "${first_priv}" "pvesm remove ${NFS_STORAGE_ID} 2>/dev/null; pvesm remove ${PBS_STORAGE_ID} 2>/dev/null; pvesm remove ${LOCAL_STORAGE_ID} 2>/dev/null; true"
-    fi
-
-    # Reset the recorded state so that a re-run starts from the foundation.
-    state_set ".pve.cluster_formed" "false"
-    state_set ".pve.vms_ready" "false"
-    state_set ".pve.cts_ready" "false"
-    state_set ".pve.security_ready" "false"
-    state_set ".phase" "\"foundation\""
-}
-
-clean_nfs_export() {
-    local nfs_ip
-    nfs_ip="$(state_get ".instances.nfs1.private_ip")"
-    [ -n "${nfs_ip}" ] || return 0
-    if ssh_exec_q "${nfs_ip}" "true"; then
-        log_step "Cleaning the shared NFS export"
-        run ssh_exec_q "${nfs_ip}" "rm -rf ${NFS_EXPORT}/images/* ${NFS_EXPORT}/rootfs/* ${NFS_EXPORT}/iso/* ${NFS_EXPORT}/vztmpl/* ${NFS_EXPORT}/backup/* 2>/dev/null; true"
-    fi
-}
 
 # --- scope 2: the AWS resources ----------------------------------------------
 
@@ -323,16 +254,16 @@ main() {
     fi
 
     if [ "${SCOPE}" = "cluster" ] || [ "${SCOPE}" = "all" ]; then
-        destroy_guests
-        clean_nfs_export
-        reset_cluster
+        lab_destroy_guests
+        lab_clean_nfs_export
+        lab_reset_cluster
     fi
 
     if [ "${SCOPE}" = "aws" ] || [ "${SCOPE}" = "all" ]; then
         if [ "${SCOPE}" = "all" ]; then
-            destroy_guests
-            clean_nfs_export
-            reset_cluster
+            lab_destroy_guests
+            lab_clean_nfs_export
+            lab_reset_cluster
         fi
         terminate_instances
         delete_volumes

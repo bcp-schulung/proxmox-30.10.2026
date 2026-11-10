@@ -193,7 +193,7 @@ assert_eq "human_duration for hours" "1h 5m" "$(human_duration 3900)"
 # -----------------------------------------------------------------------------
 section "File inventory"
 
-for f in provision.sh debug.sh shutdown.sh clean.sh \
+for f in provision.sh debug.sh shutdown.sh clean.sh destroy.sh \
          lib/common.sh lib/config.sh lib/state.sh lib/aws.sh lib/ssh.sh lib/pve.sh lib/lab.sh \
          scripts/node-bootstrap.sh scripts/nfs-setup.sh scripts/pbs-setup.sh \
          packer/pve.pkr.hcl packer/pbs.pkr.hcl \
@@ -206,7 +206,7 @@ for f in provision.sh debug.sh shutdown.sh clean.sh \
 done
 
 # Every script must be syntactically valid.
-for f in provision.sh debug.sh shutdown.sh clean.sh lib/*.sh scripts/*.sh packer/scripts/*.sh; do
+for f in provision.sh debug.sh shutdown.sh clean.sh destroy.sh lib/*.sh scripts/*.sh packer/scripts/*.sh; do
     if bash -n "${LAB_ROOT}/${f}" 2>/dev/null; then
         ok "${f} parses"
     else

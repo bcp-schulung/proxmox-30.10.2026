@@ -61,7 +61,9 @@ source "amazon-ebs" "pve" {
   }
 
   run_tags = {
-    Name = "packer-build-pve"
+    Name    = "packer-build-pve"
+    LabTag  = "pve-advanced-seminar-lab"
+    LabRole = "pve-ami-build"
   }
 
   # A scratch volume so the Proxmox installation never touches the root disk.
