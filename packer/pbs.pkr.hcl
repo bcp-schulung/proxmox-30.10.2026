@@ -33,6 +33,17 @@ variable "ssh_key_path" {
   description = "Path to the private key used for the build instance"
 }
 
+variable "ssh_keypair_name" {
+  type        = string
+  description = "Name of the EC2 key pair - without it the instance gets no key and SSH fails"
+}
+
+variable "subnet_id" {
+  type        = string
+  default     = ""
+  description = "Subnet the build instance runs in - empty means the default VPC"
+}
+
 variable "build_instance_type" {
   type        = string
   default     = "m8i.4xlarge"
@@ -47,9 +58,16 @@ source "amazon-ebs" "pbs" {
 
   encrypt_boot = true
 
-  ssh_username         = "root"
+  # Pin the build to the lab VPC when one exists.
+  subnet_id = var.subnet_id != "" ? var.subnet_id : null
+
+  ssh_username         = "admin"
   ssh_private_key_file = var.ssh_key_path
+  ssh_keypair_name     = var.ssh_keypair_name
   ssh_timeout          = "20m"
+
+  # The build instance needs a public address to reach the package mirrors.
+  associate_public_ip_address = true
 
   tags = {
     Name    = var.pbs_ami_name

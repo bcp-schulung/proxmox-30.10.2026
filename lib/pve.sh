@@ -20,11 +20,13 @@ __LAB_PVE_SOURCED=1
 
 # Run a command on a node with proper shell quoting.
 # pve_cmd <host> <command> [args...]
+# The Proxmox CLI has to run as root. The Debian cloud image logs in as the
+# unprivileged "admin" user, so every command is run through sudo.
 pve_cmd() {
     local host="$1"; shift
     local cmd
     cmd="$(printf '%q ' "$@")"
-    ssh_exec "${host}" "${cmd}"
+    ssh_exec "${host}" "sudo ${cmd}"
 }
 
 # Same, but discards stdout and only reports success/failure.
@@ -32,7 +34,7 @@ pve_cmd_q() {
     local host="$1"; shift
     local cmd
     cmd="$(printf '%q ' "$@")"
-    ssh_exec_q "${host}" "${cmd}"
+    ssh_exec_q "${host}" "sudo ${cmd}"
 }
 
 # Run a Proxmox command on a node and print its stdout. stderr is passed
@@ -43,7 +45,7 @@ pve_cmd_out() {
     local cmd
     cmd="$(printf '%q ' "$@")"
     # shellcheck disable=SC2046
-    ssh $(ssh_options) "root@${host}" "${cmd}"
+    ssh $(ssh_options) "${SSH_USER}@${host}" "sudo ${cmd}"
 }
 
 # Run a Proxmox command on the node that currently holds the cluster (any

@@ -17,6 +17,11 @@ __LAB_SSH_SOURCED=1
 # shellcheck source=lib/config.sh
 . "${LAB_LIB_DIR}/config.sh"
 
+# The user the harness logs in as. The Debian cloud images ship with the
+# unprivileged "admin" account and cloud-init does not install an
+# authorized key for root, so root login with a key does not work.
+SSH_USER="${SSH_USER:-admin}"
+
 # The SSH options are built on demand: at source time the configuration has
 # not been loaded yet, so PVE_SSH_KEY_PATH may not exist.
 # shellcheck disable=SC2046
@@ -36,28 +41,28 @@ ssh_options() {
 ssh_exec() {
     local host="$1"; shift
     # shellcheck disable=SC2046
-    ssh $(ssh_options) "root@${host}" "$@"
+    ssh $(ssh_options) "${SSH_USER}@${host}" "$@"
 }
 
 # ssh_exec_sh <host> <script> - pipe a script over stdin and run it with bash
 ssh_exec_sh() {
     local host="$1"; shift
     # shellcheck disable=SC2046
-    ssh $(ssh_options) "root@${host}" "bash -s" "$@"
+    ssh $(ssh_options) "${SSH_USER}@${host}" "bash -s" "$@"
 }
 
 # ssh_exec_q <host> <command...> - quiet, returns the exit code
 ssh_exec_q() {
     local host="$1"; shift
     # shellcheck disable=SC2046
-    ssh $(ssh_options) "root@${host}" "$@" >/dev/null 2>&1
+    ssh $(ssh_options) "${SSH_USER}@${host}" "$@" >/dev/null 2>&1
 }
 
 # ssh_write <host> <local-file> <remote-file>
 ssh_write() {
     local host="$1" src="$2" dst="$3"
     # shellcheck disable=SC2046
-    scp $(ssh_options) "${src}" "root@${host}:${dst}"
+    scp $(ssh_options) "${src}" "${SSH_USER}@${host}:${dst}"
 }
 
 # ssh_run_local <host> <local-script> [args...] - upload to /tmp and execute
@@ -69,8 +74,9 @@ ssh_run_local() {
     if [ $# -gt 0 ]; then
         quoted="$(printf '%q ' "$@")"
     fi
+    # The setup scripts configure the system, so they run through sudo.
     # shellcheck disable=SC2046
-    ssh $(ssh_options) "root@${host}" "chmod +x '${remote}' && '${remote}' ${quoted}; rc=\$?; rm -f '${remote}'; exit \$rc"
+    ssh $(ssh_options) "${SSH_USER}@${host}" "sudo chmod +x '${remote}' && sudo '${remote}' ${quoted}; rc=\$?; rm -f '${remote}'; exit \$rc"
 }
 
 # Wait until SSH answers on a host. wait_ssh <host> [timeout]

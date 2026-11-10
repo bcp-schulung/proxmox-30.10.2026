@@ -339,15 +339,22 @@ lab_phase_amis() {
 # lab_build_ami <pve|pbs> <hcl-file> <base-ami>
 lab_build_ami() {
     local kind="$1" hcl="$2" base_ami="$3"
-    local ami_name var_name
+    local ami_name var_name volume_size
 
     if [ "${kind}" = "pve" ]; then
         ami_name="${PVE_AMI_NAME}"
         var_name="pve_ami_name"
+        volume_size="${PVE_ROOT_VOLUME_SIZE}"
     else
         ami_name="${PBS_AMI_NAME}"
         var_name="pbs_ami_name"
+        volume_size="16"
     fi
+
+    # The build instance runs in the lab VPC, so that it is covered by the
+    # same tags and gets a public address from the public subnet.
+    local subnet_id
+    subnet_id="$(state_get ".subnets.public.id")"
 
     log_info "Building the ${kind} AMI with Packer (this takes several minutes)..."
     if ! packer init "${hcl}" >/dev/null 2>&1; then
@@ -359,8 +366,10 @@ lab_build_ami() {
         -var "region=${PACKER_AMI_REGION}" \
         -var "base_ami=${base_ami}" \
         -var "${var_name}=${ami_name}" \
-        -var "root_volume_size=${PVE_ROOT_VOLUME_SIZE}" \
+        -var "root_volume_size=${volume_size}" \
         -var "ssh_key_path=${PVE_SSH_KEY_PATH}" \
+        -var "ssh_keypair_name=${PVE_KEYPAIR_NAME}" \
+        -var "subnet_id=${subnet_id}" \
         "${hcl}" >&2; then
         die "Packer build for the ${kind} AMI failed."
     fi
@@ -476,7 +485,7 @@ lab_phase_bootstrap() {
         local data_device
         data_device="$(resolve_volume_device "${priv}" "$(state_get ".instances.${node}.data_volume")" || true)"
         if [ -z "${data_device}" ]; then
-            data_device="$(ssh_exec "${priv}" "lsblk -ndo NAME | grep -v '^nvme0n1$' | head -1" || true)"
+            data_device="$(ssh_exec "${priv}" "sudo lsblk -ndo NAME | grep -v '^nvme0n1$' | head -1" || true)"
         fi
         [ -n "${data_device}" ] || die "Could not determine the data volume device on ${node}."
         log_info "Data volume on ${node}: ${data_device}"
@@ -497,7 +506,7 @@ lab_phase_bootstrap() {
             || die "Bootstrap failed on ${node}"
 
         log_info "Rebooting ${node} to apply the network configuration..."
-        ssh_exec_q "${priv}" "nohup sh -c 'sleep 1; systemctl reboot' >/dev/null 2>&1 &" || true
+        ssh_exec_q "${priv}" "sudo nohup sh -c 'sleep 1; systemctl reboot' >/dev/null 2>&1 &" || true
         sleep 10
         if ! wait_ssh "${priv}" "${BOOT_TIMEOUT}"; then
             die "${node} did not come back after the reboot. Use ./debug.sh for diagnostics."
@@ -505,7 +514,7 @@ lab_phase_bootstrap() {
         log_ok "${node} is back with the new network configuration"
 
         # Sanity check the bridge.
-        if ! ssh_exec_q "${priv}" "ip -4 addr show vmbr0 | grep -q 'inet'"; then
+        if ! ssh_exec_q "${priv}" "sudo ip -4 addr show vmbr0 | grep -q 'inet'"; then
             die "${node} rebooted but vmbr0 has no address. Use ./debug.sh."
         fi
 
@@ -538,9 +547,9 @@ lab_phase_cluster() {
     for node in $(lab_node_list); do
         local priv
         priv="$(state_get ".instances.${node}.private_ip")"
-        ssh_exec "${priv}" "mkdir -p /root/.ssh && chmod 700 /root/.ssh && \
-            [ -f /root/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519 -C 'pve-cluster-${node}' >/dev/null" || true
-        pubkey="$(ssh_exec "${priv}" "cat /root/.ssh/id_ed25519.pub")"
+        ssh_exec "${priv}" "sudo mkdir -p /root/.ssh && sudo chmod 700 /root/.ssh && \
+            sudo test -f /root/.ssh/id_ed25519 || sudo ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519 -C 'pve-cluster-${node}' >/dev/null" || true
+        pubkey="$(ssh_exec "${priv}" "sudo cat /root/.ssh/id_ed25519.pub")"
         keys="${keys}${pubkey}"$'\n'
     done
 
@@ -680,7 +689,7 @@ lab_phase_backup() {
         "${device}" "${PBS_DATASTORE}" "${PBS_USERNAME}" "${password}" \
         || die "The Proxmox Backup Server setup failed."
 
-    fingerprint="$(ssh_exec "${pbs_ip}" "proxmox-backup-manager fingerprint 2>/dev/null | grep -oE '[A-Fa-f0-9]{2}(:[A-Fa-f0-9]{2}){31}' | head -1")"
+    fingerprint="$(ssh_exec "${pbs_ip}" "sudo proxmox-backup-manager fingerprint 2>/dev/null | grep -oE '[A-Fa-f0-9]{2}(:[A-Fa-f0-9]{2}){31}' | head -1")"
     [ -n "${fingerprint}" ] || die "Could not read the Proxmox Backup Server fingerprint."
     log_ok "PBS fingerprint: ${fingerprint}"
 
@@ -732,7 +741,7 @@ lab_provision_vms() {
     fi
 
     local image="/var/lib/vz/${GUEST_OS_NAME}-genericcloud.qcow2"
-    if ! ssh_exec_q "${host}" "test -f '${image}'"; then
+    if ! ssh_exec_q "${host}" "sudo test -f '${image}'"; then
         pve_download "${host}" "${GUEST_OS_URL}" "${image}"
     else
         log_info "The guest image is already present on ${node}"
@@ -837,7 +846,7 @@ lab_fetch_ct_template() {
     local listing file
 
     log_info "Looking up the latest Debian 13 container template"
-    listing="$(ssh_exec "${host}" "curl -fsS --max-time 60 http://download.proxmox.com/images/system/ | grep -oE 'debian-13-standard_[0-9.]+-[0-9]+_amd64\\.tar\\.zst' | sort -uV | tail -1" 2>/dev/null || true)"
+    listing="$(ssh_exec "${host}" "sudo curl -fsS --max-time 60 http://download.proxmox.com/images/system/ | grep -oE 'debian-13-standard_[0-9.]+-[0-9]+_amd64\\.tar\\.zst' | sort -uV | tail -1" 2>/dev/null || true)"
     file="${listing}"
 
     if [ -z "${file}" ]; then
@@ -938,17 +947,17 @@ lab_destroy_guests() {
         fi
 
         local vmid
-        for vmid in $(ssh_exec "${priv}" "qm list 2>/dev/null | tail -n +2 | awk '{print \$1}'"); do
+        for vmid in $(ssh_exec "${priv}" "sudo qm list 2>/dev/null | tail -n +2 | awk '{print \$1}'"); do
             [ -n "${vmid}" ] || continue
             log_info "${node}: destroying VM ${vmid}"
-            ssh_exec_q "${priv}" "qm destroy ${vmid} --purge 1 --destroy-unreferenced-disks 1"
+            ssh_exec_q "${priv}" "sudo qm destroy ${vmid} --purge 1 --destroy-unreferenced-disks 1"
         done
 
         local ctid
-        for ctid in $(ssh_exec "${priv}" "pct list 2>/dev/null | tail -n +2 | awk '{print \$1}'"); do
+        for ctid in $(ssh_exec "${priv}" "sudo pct list 2>/dev/null | tail -n +2 | awk '{print \$1}'"); do
             [ -n "${ctid}" ] || continue
             log_info "${node}: destroying container ${ctid}"
-            ssh_exec_q "${priv}" "pct destroy ${ctid} --purge 1"
+            ssh_exec_q "${priv}" "sudo pct destroy ${ctid} --purge 1"
         done
     done
 }
@@ -962,7 +971,7 @@ lab_reset_cluster() {
         priv="$(state_get ".instances.${node}.private_ip")"
         ssh_exec_q "${priv}" "true" || continue
         log_info "${node}: leaving the cluster"
-        ssh_exec_q "${priv}" "pvecm leave --force"
+        ssh_exec_q "${priv}" "sudo pvecm leave --force"
         last="${priv}"
     done
 
@@ -970,14 +979,14 @@ lab_reset_cluster() {
     # 'pvecm create' starts from a clean slate.
     if [ -n "${last}" ]; then
         log_info "Removing the stored cluster configuration"
-        ssh_exec_q "${last}" "rm -f /etc/pve/corosync.conf /etc/pve/cluster/ /etc/pve/nodes/*/corosync.conf 2>/dev/null; true"
+        ssh_exec_q "${last}" "sudo rm -f /etc/pve/corosync.conf /etc/pve/cluster/ /etc/pve/nodes/*/corosync.conf 2>/dev/null; true"
     fi
 
     # The storage definitions live in the cluster configuration too.
     local first_priv
     first_priv="$(state_get ".instances.$(lab_node_list | head -1).private_ip")"
     if ssh_exec_q "${first_priv}" "true"; then
-        ssh_exec_q "${first_priv}" "pvesm remove ${NFS_STORAGE_ID} 2>/dev/null; pvesm remove ${PBS_STORAGE_ID} 2>/dev/null; pvesm remove ${LOCAL_STORAGE_ID} 2>/dev/null; true"
+        ssh_exec_q "${first_priv}" "sudo pvesm remove ${NFS_STORAGE_ID} 2>/dev/null; sudo pvesm remove ${PBS_STORAGE_ID} 2>/dev/null; sudo pvesm remove ${LOCAL_STORAGE_ID} 2>/dev/null; true"
     fi
 
     # Reset the recorded state so that a re-run starts from the foundation.

@@ -6,6 +6,13 @@ set -euxo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
+# The Debian cloud image ships with an unprivileged "admin" account. The
+# harness logs in as that user, so it needs passwordless sudo.
+if ! grep -q '^admin ALL=' /etc/sudoers 2>/dev/null; then
+    echo 'admin ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-lab-admin
+    chmod 440 /etc/sudoers.d/90-lab-admin
+fi
+
 apt-get update
 apt-get -y upgrade
 apt-get install -y \
