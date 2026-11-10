@@ -36,14 +36,18 @@ else
 fi
 
 # --- Logging -----------------------------------------------------------------
-log_info()    { printf '%s[ INFO ]%s %s\n'    "${C_BLUE}"   "${C_RESET}" "$*"; }
-log_ok()      { printf '%s[  OK  ]%s %s\n'    "${C_GREEN}"  "${C_RESET}" "$*"; }
+#
+# All log output goes to stderr. That matters: many helpers return a value
+# through stdout and are used as `value="$(helper)"`. If the helper also
+# logged to stdout, the log text would end up inside the captured value.
+log_info()    { printf '%s[ INFO ]%s %s\n'    "${C_BLUE}"   "${C_RESET}" "$*" >&2; }
+log_ok()      { printf '%s[  OK  ]%s %s\n'    "${C_GREEN}"  "${C_RESET}" "$*" >&2; }
 log_warn()    { printf '%s[ WARN ]%s %s\n'    "${C_YELLOW}" "${C_RESET}" "$*" >&2; }
 log_error()   { printf '%s[ERROR ]%s %s\n'    "${C_RED}"    "${C_RESET}" "$*" >&2; }
 log_debug()   { [ -n "${LAB_DEBUG:-}" ] && printf '%s[DEBUG ]%s %s\n' "${C_DIM}" "${C_RESET}" "$*" >&2 || true; }
-log_step()    { printf '\n%s%s==> %s%s\n' "${C_BOLD}" "${C_CYAN}" "$*" "${C_RESET}"; }
-log_substep() { printf '    %s->%s %s\n' "${C_DIM}" "${C_RESET}" "$*"; }
-log_section() { printf '\n%s%s%s\n' "${C_BOLD}" "----------------------------------------------------------------------" "${C_RESET}"; }
+log_step()    { printf '\n%s%s==> %s%s\n' "${C_BOLD}" "${C_CYAN}" "$*" "${C_RESET}" >&2; }
+log_substep() { printf '    %s->%s %s\n' "${C_DIM}" "${C_RESET}" "$*" >&2; }
+log_section() { printf '\n%s%s%s\n' "${C_BOLD}" "----------------------------------------------------------------------" "${C_RESET}" >&2; }
 
 die() {
     log_error "$*"
@@ -198,7 +202,7 @@ human_duration() {
 
 # Print a boxed summary header.
 print_banner() {
-    printf '\n%s%s%s\n' "${C_BOLD}" "======================================================================" "${C_RESET}"
-    printf '%s  %s%s\n' "${C_BOLD}" "$*" "${C_RESET}"
-    printf '%s%s%s\n\n' "${C_BOLD}" "======================================================================" "${C_RESET}"
+    printf '\n%s%s%s\n' "${C_BOLD}" "======================================================================" "${C_RESET}" >&2
+    printf '%s  %s%s\n' "${C_BOLD}" "$*" "${C_RESET}" >&2
+    printf '%s%s%s\n\n' "${C_BOLD}" "======================================================================" "${C_RESET}" >&2
 }

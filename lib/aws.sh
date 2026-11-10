@@ -63,8 +63,10 @@ aws_igw_id() {
 }
 
 aws_natgw_id() {
+    # describe-nat-gateways is the one EC2 command that takes --filter
+    # (singular) instead of --filters.
     aws_cli ec2 describe-nat-gateways --region "${AWS_REGION}" \
-        --filters "Name=vpc-id,Values=$(aws_vpc_id)" \
+        --filter "Name=vpc-id,Values=$(aws_vpc_id)" \
         --query "NatGateways[0].NatGatewayId" --output text 2>/dev/null | sed 's/^None$//'
 }
 
@@ -122,8 +124,16 @@ aws_vpc_create() {
     local vpc_id
     vpc_id="$(aws_cli ec2 create-vpc --region "${AWS_REGION}" \
         --cidr-block "${VPC_CIDR}" \
-        --enable-dns-hostnames --enable-dns-support \
         --query "Vpc.VpcId" --output text)"
+
+    # DNS support and DNS hostnames are separate VPC attributes - create-vpc
+    # does not accept them, and modify-vpc-attribute only accepts one
+    # attribute type per call.
+    aws_cli ec2 modify-vpc-attribute --region "${AWS_REGION}" --vpc-id "${vpc_id}" \
+        --enable-dns-support >/dev/null
+    aws_cli ec2 modify-vpc-attribute --region "${AWS_REGION}" --vpc-id "${vpc_id}" \
+        --enable-dns-hostnames >/dev/null
+
     aws_tag_lab "${vpc_id}" "vpc" "vpc"
     log_debug "Created VPC ${vpc_id} (${VPC_CIDR})"
     printf '%s' "${vpc_id}"
@@ -176,14 +186,6 @@ aws_natgw_create() {
     printf '%s' "${nat_id}"
 }
 
-aws_route_create() {
-    # aws_route_create <route-cidr> <gateway-id> <gateway-type>
-    aws_cli ec2 create-route --region "${AWS_REGION}" \
-        --route-table-id "$(aws_default_route_table_id)" \
-        --destination-cidr-block "$1" --gateway-id "$2" \
-        --gateway-type "$3" >/dev/null
-}
-
 aws_default_route_table_id() {
     aws_cli ec2 describe-route-tables --region "${AWS_REGION}" \
         --filters "Name=vpc-id,Values=$(aws_vpc_id)" \
@@ -202,11 +204,22 @@ aws_create_route_table() {
 
 aws_route_to() {
     # aws_route_to <route-table-id> <cidr> <gateway-id> <gateway-type>
-    aws_cli ec2 create-route --region "${AWS_REGION}" \
-        --route-table-id "$1" \
-        --destination-cidr-block "$2" \
-        --gateway-id "$3" \
-        --gateway-type "$4" >/dev/null
+    #
+    # create-route has no --gateway-type option: the gateway type is derived
+    # from the option that is used.
+    local rtb="$1" cidr="$2" gw="$3" gwtype="$4"
+    case "${gwtype}" in
+        nat-gateway)
+            aws_cli ec2 create-route --region "${AWS_REGION}" \
+                --route-table-id "${rtb}" --destination-cidr-block "${cidr}" \
+                --nat-gateway-id "${gw}" >/dev/null
+            ;;
+        *)
+            aws_cli ec2 create-route --region "${AWS_REGION}" \
+                --route-table-id "${rtb}" --destination-cidr-block "${cidr}" \
+                --gateway-id "${gw}" >/dev/null
+            ;;
+    esac
 }
 
 aws_associate_route_table() {
@@ -232,22 +245,33 @@ aws_sg_allow() {
     local proto="$2" port="$3" cidr="$4" desc="${5:-lab rule}"
     local perms
 
+    # The shorthand syntax expects the address inside IpRanges - a bare
+    # CidrIp key is rejected by the API.
     if [ "${proto}" = "-1" ]; then
-        perms="IpProtocol=-1,CidrIp=${cidr}"
+        perms="IpProtocol=-1,IpRanges=[{CidrIp=\"${cidr}\"}]"
     elif [ -z "${port}" ]; then
-        perms="IpProtocol=${proto},CidrIp=${cidr}"
+        perms="IpProtocol=${proto},IpRanges=[{CidrIp=\"${cidr}\"}]"
     elif printf '%s' "${port}" | grep -q '^[0-9]\+-[0-9]\+$'; then
         local from to
         from="${port%%-*}"
         to="${port##*-}"
-        perms="IpProtocol=${proto},FromPort=${from},ToPort=${to},CidrIp=${cidr}"
+        perms="IpProtocol=${proto},FromPort=${from},ToPort=${to},IpRanges=[{CidrIp=\"${cidr}\"}]"
     else
-        perms="IpProtocol=${proto},FromPort=${port},ToPort=${port},CidrIp=${cidr}"
+        perms="IpProtocol=${proto},FromPort=${port},ToPort=${port},IpRanges=[{CidrIp=\"${cidr}\"}]"
     fi
 
-    aws_cli ec2 authorize-security-group-ingress --region "${AWS_REGION}" \
+    # Adding a rule that already exists is not an error for us - the rules
+    # are re-applied on every run so that a partially configured security
+    # group gets completed.
+    local output
+    if ! output="$(aws_cli ec2 authorize-security-group-ingress --region "${AWS_REGION}" \
         --group-id "$1" --ip-permissions "${perms}" \
-        --tag-specifications "ResourceType=security-group-rule,Tags=[{Key=Description,Value=${desc}}]" >/dev/null
+        --tag-specifications "ResourceType=security-group-rule,Tags=[{Key=Description,Value=${desc}}]" 2>&1)"; then
+        case "${output}" in
+            *InvalidPermission.Duplicate*|*"already exists"*) return 0 ;;
+            *) printf '%s\n' "${output}" >&2; return 1 ;;
+        esac
+    fi
 }
 
 aws_sg_allow_sg() {
@@ -255,9 +279,9 @@ aws_sg_allow_sg() {
     local proto="$3" port="$4" desc="${5:-lab rule}"
     local perms
     if [ -n "${port}" ]; then
-        perms="IpProtocol=${proto},FromPort=${port},ToPort=${port},UserIdGroupPairs=[{GroupId=$2}]"
+        perms="IpProtocol=${proto},FromPort=${port},ToPort=${port},UserIdGroupPairs=[{GroupId=\"$2\"}]"
     else
-        perms="IpProtocol=${proto},UserIdGroupPairs=[{GroupId=$2}]"
+        perms="IpProtocol=${proto},UserIdGroupPairs=[{GroupId=\"$2\"}]"
     fi
     aws_cli ec2 authorize-security-group-ingress --region "${AWS_REGION}" \
         --group-id "$1" --ip-permissions "${perms}" \
@@ -314,7 +338,7 @@ aws_instance_launch() {
         --instance-type "${itype}"
         --cpu-options "NestedVirtualization=enabled"
         --key-name "${PVE_KEYPAIR_NAME}"
-        --availability-zone "${az}"
+        --placement "{\"AvailabilityZone\":\"${az}\"}"
         --network-interfaces "${netif}"
         --block-device-mappings "${bdm}"
         --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${LAB_TAG}-${role}-${name}},{Key=LabTag,Value=${LAB_TAG}},{Key=LabRole,Value=${role}}]"
@@ -341,7 +365,8 @@ aws_instance_launch_service() {
 
     aws_cli ec2 run-instances --region "${AWS_REGION}" \
         --image-id "${ami}" --instance-type "${itype}" \
-        --key-name "${PVE_KEYPAIR_NAME}" --availability-zone "${az}" \
+        --key-name "${PVE_KEYPAIR_NAME}" \
+        --placement "{\"AvailabilityZone\":\"${az}\"}" \
         --network-interfaces "${netif}" --block-device-mappings "${bdm}" \
         --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${LAB_TAG}-${role}-${name}},{Key=LabTag,Value=${LAB_TAG}},{Key=LabRole,Value=${role}}]" \
         --query "Instances[0].InstanceId" --output text
@@ -513,7 +538,7 @@ aws_lab_route_tables() {
 
 aws_lab_natgws() {
     aws_cli ec2 describe-nat-gateways --region "${AWS_REGION}" \
-        --filters "Name=tag:LabTag,Values=${LAB_TAG}" \
+        --filter "Name=tag:LabTag,Values=${LAB_TAG}" \
         --query 'NatGateways[].NatGatewayId' --output text 2>/dev/null | tr '\t' '\n' || true
 }
 

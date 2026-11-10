@@ -138,6 +138,9 @@ lab_phase_foundation() {
     else
         log_info "VPC ${vpc_id} already exists"
     fi
+    # Always (re-)apply the tag: a VPC that was created by an earlier,
+    # interrupted run may not carry it, and destroy.sh finds resources by tag.
+    aws_tag_lab "${vpc_id}" "vpc" "vpc"
     state_set ".vpc.id" "\"${vpc_id}\""
     state_set ".vpc.cidr" "\"${VPC_CIDR}\""
     state_set ".vpc.az" "\"${az}\""
@@ -153,6 +156,7 @@ lab_phase_foundation() {
         else
             log_info "Subnet ${role} ${subnet} already exists"
         fi
+        aws_tag_lab "${subnet}" "subnet-${role}" "subnet"
         state_set ".subnets.${role}" "{\"id\":\"${subnet}\",\"cidr\":\"${cidr}\"}"
     done
 
@@ -240,6 +244,13 @@ lab_caller_cidr() {
             export AWS_CALLER_IP
         fi
     fi
+
+    # A security group rule needs a prefix length.
+    case "${AWS_CALLER_IP}" in
+        */*) : ;;
+        *)   AWS_CALLER_IP="${AWS_CALLER_IP}/32"; export AWS_CALLER_IP ;;
+    esac
+
     printf '%s' "${AWS_CALLER_IP}"
 }
 
@@ -251,39 +262,43 @@ lab_create_security_groups() {
     if [ -z "${pve_sg}" ]; then
         pve_sg="$(aws_sg_create "pve-lab" "Proxmox VE cluster nodes (seminar lab)")"
         log_ok "Security group pve-lab (${pve_sg}) created"
-
-        # Operator access
-        aws_sg_allow "${pve_sg}" tcp 22 "${caller}" "SSH from the operator"
-        aws_sg_allow "${pve_sg}" tcp 8006 "${caller}" "Proxmox web UI from the operator"
-        aws_sg_allow "${pve_sg}" tcp 5900-5999 "${caller}" "VNC/SPICE console from the operator"
-
-        # Node to node: corosync/KNET (5405-5412), pvecm (7946), SSH, web UI.
-        aws_sg_allow "${pve_sg}" udp 5405-5412 "${VPC_CIDR}" "corosync/KNET between nodes"
-        aws_sg_allow "${pve_sg}" tcp 22 "${VPC_CIDR}" "SSH between nodes"
-        aws_sg_allow "${pve_sg}" tcp 8006 "${VPC_CIDR}" "web UI between nodes"
-
-        # Guest overlay traffic is NATed through the node, so the node's own
-        # address is what the shared storage sees.
-        aws_sg_allow "${pve_sg}" tcp 2049 "${VPC_CIDR}" "NFS from the cluster"
-        aws_sg_allow "${pve_sg}" tcp 8007 "${VPC_CIDR}" "Proxmox Backup Server"
-        aws_sg_allow "${pve_sg}" icmp -1 "${VPC_CIDR}" "ICMP inside the VPC"
     else
         log_info "Security group pve-lab already exists"
     fi
+    aws_tag_lab "${pve_sg}" "pve-lab" "sg"
+
+    # The rules are re-applied on every run so that a security group left
+    # behind by an interrupted run gets completed. Adding a rule that
+    # already exists is tolerated.
+    aws_sg_allow "${pve_sg}" tcp 22 "${caller}" "SSH from the operator"
+    aws_sg_allow "${pve_sg}" tcp 8006 "${caller}" "Proxmox web UI from the operator"
+    aws_sg_allow "${pve_sg}" tcp "5900-5999" "${caller}" "VNC/SPICE console from the operator"
+
+    # Node to node: corosync/KNET (5405-5412), pvecm (7946), SSH, web UI.
+    aws_sg_allow "${pve_sg}" udp "5405-5412" "${VPC_CIDR}" "corosync/KNET between nodes"
+    aws_sg_allow "${pve_sg}" tcp 22 "${VPC_CIDR}" "SSH between nodes"
+    aws_sg_allow "${pve_sg}" tcp 8006 "${VPC_CIDR}" "web UI between nodes"
+
+    # Guest overlay traffic is NATed through the node, so the node's own
+    # address is what the shared storage sees.
+    aws_sg_allow "${pve_sg}" tcp 2049 "${VPC_CIDR}" "NFS from the cluster"
+    aws_sg_allow "${pve_sg}" tcp 8007 "${VPC_CIDR}" "Proxmox Backup Server"
+    aws_sg_allow "${pve_sg}" icmp -1 "${VPC_CIDR}" "ICMP inside the VPC"
     state_set ".sgs.pve" "\"${pve_sg}\""
 
     services_sg="$(aws_sg_id "services-lab")"
     if [ -z "${services_sg}" ]; then
         services_sg="$(aws_sg_create "services-lab" "NFS and Proxmox Backup Server (seminar lab)")"
         log_ok "Security group services-lab (${services_sg}) created"
-
-        aws_sg_allow "${services_sg}" tcp 22 "${caller}" "SSH from the operator"
-        aws_sg_allow "${services_sg}" tcp 2049 "${VPC_CIDR}" "NFS from the cluster nodes"
-        aws_sg_allow "${services_sg}" tcp 8007 "${VPC_CIDR}" "PBS web UI and API from the cluster"
-        aws_sg_allow "${services_sg}" icmp -1 "${VPC_CIDR}" "ICMP inside the VPC"
     else
         log_info "Security group services-lab already exists"
     fi
+    aws_tag_lab "${services_sg}" "services-lab" "sg"
+
+    aws_sg_allow "${services_sg}" tcp 22 "${caller}" "SSH from the operator"
+    aws_sg_allow "${services_sg}" tcp 2049 "${VPC_CIDR}" "NFS from the cluster nodes"
+    aws_sg_allow "${services_sg}" tcp 8007 "${VPC_CIDR}" "PBS web UI and API from the cluster"
+    aws_sg_allow "${services_sg}" icmp -1 "${VPC_CIDR}" "ICMP inside the VPC"
     state_set ".sgs.services" "\"${services_sg}\""
 }
 
