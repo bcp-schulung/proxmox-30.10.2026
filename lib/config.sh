@@ -188,15 +188,29 @@ aws_export_login_credentials() {
 
     [ -n "${access}" ] && [ -n "${secret}" ] && [ -n "${token}" ] || return 1
 
+    # The cache file holds the credentials of the last CLI login. The CLI
+    # refreshes them on its own, so before using the cached copy we make sure
+    # the CLI has run - that is what refreshes the file. Otherwise an expired
+    # token is handed to Packer and the build fails with ExpiredToken.
+    if [ -n "${expires}" ] && [ "$(date -u +%s)" -gt "$(aws_expiry_epoch "${expires}")" ]; then
+        log_info "Refreshing the AWS session..."
+        aws_cli sts get-caller-identity >/dev/null 2>&1 || true
+        access="$(jq -r '.accessToken.accessKeyId // empty' "${cache}" 2>/dev/null)"
+        secret="$(jq -r '.accessToken.secretAccessKey // empty' "${cache}" 2>/dev/null)"
+        token="$(jq -r '.accessToken.sessionToken // empty' "${cache}" 2>/dev/null)"
+        expires="$(jq -r '.accessToken.expiresAt // empty' "${cache}" 2>/dev/null)"
+    fi
+
+    [ -n "${access}" ] && [ -n "${secret}" ] && [ -n "${token}" ] || return 1
+
     export AWS_ACCESS_KEY_ID="${access}"
     export AWS_SECRET_ACCESS_KEY="${secret}"
     export AWS_SESSION_TOKEN="${token}"
 
     if [ -n "${expires}" ]; then
-        local now expiry_epoch
+        local now
         now="$(date -u +%s)"
-        expiry_epoch="$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "${expires}" +%s 2>/dev/null || date -u -d "${expires}" +%s 2>/dev/null || echo "${now}")"
-        if [ "${expiry_epoch}" -le $(( now + 300 )) ]; then
+        if [ "$(aws_expiry_epoch "${expires}")" -le $(( now + 300 )) ]; then
             log_warn "The cached AWS credentials expire at ${expires}."
             log_warn "Run 'aws login' if a long build fails with an access error."
         fi
@@ -204,6 +218,14 @@ aws_export_login_credentials() {
 
     log_debug "Exported the cached AWS credentials for other tools"
     return 0
+}
+
+# Convert an ISO 8601 timestamp into a unix timestamp.
+aws_expiry_epoch() {
+    local stamp="$1"
+    date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "${stamp}" +%s 2>/dev/null \
+        || date -u -d "${stamp}" +%s 2>/dev/null \
+        || echo 0
 }
 
 # Preflight: verify AWS credentials work and the region is reachable.
