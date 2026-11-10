@@ -1,0 +1,19 @@
+# Runtime state - contains the generated credentials and the resource map
+.state/
+.env
+*.pem
+*.key
+
+# Diagnostic reports
+logs/
+
+# Packer output
+packer/manifest-*.json
+packer_*.json
+
+# Editor and OS noise
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
