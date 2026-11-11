@@ -82,12 +82,12 @@ check_task1_node_preparation() {
 
     # The firewall.
     firewall_ok="$(ex_out "pvesh get /cluster/firewall/options --output-format json 2>/dev/null \
-        | jq -r '.enable // 0'")"
+        | /opt/exercises/lib/ex-json.sh '.enable // 0'")"
     ex_assert_eq "the firewall is enabled" "1" "${firewall_ok}"
 
     local policy
     policy="$(ex_out "pvesh get /cluster/firewall/options --output-format json 2>/dev/null \
-        | jq -r '.policy_in // empty'")"
+        | /opt/exercises/lib/ex-json.sh '.policy_in // empty'")"
     ex_assert_eq "the inbound policy is DROP" "DROP" "${policy}"
 
     # The rules that the cluster needs.
@@ -192,16 +192,8 @@ check_task3_storage() {
     local marker="/mnt/pve/nfs-lab/.exercise-shared-test"
     if ex_ok "touch '${marker}' 2>/dev/null"; then
         local seen_elsewhere
-        seen_elsewhere="$(ex_run "
-            for n in \$(pvecm nodes | awk 'NR>1 && \\\$3 ~ /^[0-9]+\\\$/ {print \\\$3}'); do
-                [ \"\$n\" = \"\$(hostname)\" ] && continue
-                if ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 \
-                       -o ConnectTimeout=5 \"root@\$n\" 'test -f ${marker}' 2>/dev/null; then
-                    echo \"\$n\"
-                    break
-                fi
-            done" 2>/dev/null)"
-        if [ -n "${seen_elsewhere}" ]; then
+        seen_elsewhere="$(ex_remote_members "test -f ${marker} && echo yes")"
+        if printf '%s' "${seen_elsewhere}" | grep -q 'yes'; then
             ex_pass "the NFS storage is visible from another node"
         else
             ex_fail "the NFS storage is visible from another node"
@@ -317,7 +309,7 @@ check_task5_identity() {
 
     local privsep
     privsep="$(ex_out "pveum user token list automation@pve --output-format json 2>/dev/null \
-        | jq -r '.[] | select(.tokenid==\"terraform\") | .privsep'")"
+        | /opt/exercises/lib/ex-json.sh '.[] | select(.tokenid==\"terraform\") | .privsep'")"
     ex_assert_eq "the token has privilege separation enabled" "1" "${privsep}"
 
     # The token needs its own ACL.
@@ -652,7 +644,7 @@ check_task13_backup() {
     # exercise itself created, and whose name says it is a restore.
     local restored
     restored="$(ex_out "pvesh get /cluster/resources --type vm --output-format json 2>/dev/null \
-        | jq -r '.[] | select(.vmid >= 190) | .vmid' | head -1")"
+        | /opt/exercises/lib/ex-json.sh '.[] | select(.vmid >= 190) | .vmid' | head -1")"
     if [ -n "${restored}" ]; then
         ex_pass "a restored VM exists (VMID ${restored})"
         local rstatus
@@ -688,7 +680,7 @@ check_task14_ha() {
     # The group has to contain all three nodes.
     local groupnodes
     groupnodes="$(ex_out "ha-manager group prod-nodes --output-format json 2>/dev/null \
-        | jq -r '.nodes // [] | join(\",\")'")"
+        | /opt/exercises/lib/ex-json.sh '.nodes // [] | join(\",\")'")"
     ex_assert_contains "the HA group contains pve1" "${groupnodes}" "pve1"
     ex_assert_contains "the HA group contains pve2" "${groupnodes}" "pve2"
     ex_assert_contains "the HA group contains pve3" "${groupnodes}" "pve3"

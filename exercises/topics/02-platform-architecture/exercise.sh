@@ -45,17 +45,31 @@ done
 listen="$(ex_out "ss -tln 2>/dev/null | grep ':8006'")"
 ex_assert_contains "pveproxy listens on port 8006" "${listen}" "8006"
 
-api_version="$(ex_out "curl -sk --max-time 10 https://localhost:8006/api2/json/version 2>/dev/null")"
-ex_assert_contains "the API answers on /api2/json/version" "${api_version}" "version"
+# The API needs an authentication token - an anonymous request to
+# /api2/json/version answers with HTTP 401. 'pvesh' uses the ticket of
+# the root user, so it is the convenient way to talk to the API from the
+# node itself.
+api_version="$(ex_out "pvesh get /version --output-format json 2>/dev/null")"
+ex_assert_contains "the API answers on /version" "${api_version}" "version"
 ex_assert_contains "the API reports a 9.x release" "${api_version}" "\"release\":\"9."
+
+# The API is reachable over HTTPS. The answer is '401 Unauthorized'
+# without a token, which proves that pveproxy is there and that it
+# enforces the authentication.
+api_code="$(ex_out "curl -sk -o /dev/null -w '%{http_code}' --max-time 10 \
+    https://localhost:8006/api2/json/version 2>/dev/null")"
+if [ "${api_code}" = "401" ] || [ "${api_code}" = "200" ]; then
+    ex_pass "the API is reachable on port 8006 (HTTP ${api_code})"
+else
+    ex_fail "the API is reachable on port 8006 (HTTP ${api_code})"
+fi
 
 # =============================================================================
 # The cluster filesystem
 # =============================================================================
 ex_section "The cluster filesystem"
 
-fstype="$(ex_out "stat -f -c '%T' /etc/pve 2>/dev/null")"
-ex_assert_eq "/etc/pve is a pmxcfs mount" "fuse.pmxcfs" "${fstype}"
+ex_assert_eq "/etc/pve is a pmxcfs mount" "yes" "$(ex_is_pmxcfs)"
 
 ex_assert "the directory /etc/pve/qemu-server exists" \
     "test -d /etc/pve/qemu-server"
@@ -86,16 +100,58 @@ fi
 # =============================================================================
 ex_section "The same operation, three ways"
 
+# 'jq' is not installed on a Proxmox node - python3 is. The counting is
+# done with python3, because the JSON has to be parsed properly.
+count_py='import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print("")
+    sys.exit(0)
+if isinstance(d,dict):
+    d=[d]
+print(len(d))'
+
 cli_count="$(ex_out "qm list 2>/dev/null | tail -n +2 | grep -c '^ *[0-9]'")"
-api_count="$(ex_out "pvesh get /nodes/\$(hostname)/qemu --output-format json 2>/dev/null | jq 'length' 2>/dev/null")"
-cluster_count="$(ex_out "pvesh get /cluster/resources --type vm --output-format json 2>/dev/null | jq 'length' 2>/dev/null")"
+api_count="$(ex_out "pvesh get /nodes/\$(hostname)/qemu --output-format json 2>/dev/null \
+    | python3 -c \"${count_py}\" 2>/dev/null")"
+cluster_count="$(ex_out "pvesh get /cluster/resources --type vm --output-format json 2>/dev/null \
+    | python3 -c \"${count_py}\" 2>/dev/null")"
 
 ex_assert_not_empty "qm list returns the guest list" "${cli_count}"
 ex_assert_not_empty "the node API returns the guest list" "${api_count}"
 ex_assert_not_empty "the cluster API returns the guest list" "${cluster_count}"
 
+# 'qm list' shows the guests of THIS node, the node API the guests of
+# THIS node, and the cluster API the guests of the WHOLE cluster. The
+# first two have to agree. The cluster count is larger as soon as a
+# guest runs on another node - and it must never be smaller.
 ex_assert_eq "qm list and the node API agree" "${cli_count}" "${api_count}"
-ex_assert_eq "qm list and the cluster API agree" "${cli_count}" "${cluster_count}"
+
+if [ "${cluster_count:-0}" -ge "${cli_count:-0}" ]; then
+    ex_pass "the cluster API sees at least the guests of this node (${cluster_count} >= ${cli_count})"
+else
+    ex_fail "the cluster API sees at least the guests of this node (${cluster_count} < ${cli_count})"
+fi
+
+# Every guest that the node knows has to be in the cluster listing.
+cluster_ids="$(ex_out "pvesh get /cluster/resources --type vm --output-format json 2>/dev/null \
+    | python3 -c \"import json,sys
+d=json.load(sys.stdin)
+print(' '.join(str(v['vmid']) for v in d))\" 2>/dev/null")"
+local_ids="$(ex_out "qm list 2>/dev/null | tail -n +2 | grep -E '^ *[0-9]+' | awk '{print \$1}' | tr '\n' ' '")"
+missing=""
+for id in ${local_ids}; do
+    case " ${cluster_ids} " in
+        *" ${id} "*) ;;
+        *) missing="${missing} ${id}" ;;
+    esac
+done
+if [ -z "${missing}" ]; then
+    ex_pass "every guest of this node is in the cluster listing"
+else
+    ex_fail "every guest of this node is in the cluster listing (missing:${missing})"
+fi
 
 # =============================================================================
 # The replication
@@ -128,10 +184,17 @@ ex_section "The QEMU process"
 running="$(ex_out "qm list 2>/dev/null | grep -c 'running'")"
 if [ "${running:-0}" -gt 0 ]; then
     vmid="$(ex_out "qm list 2>/dev/null | awk '/running/ {print \$1; exit}'")"
+    # Proxmox 9 does not start 'qemu-system-x86_64' directly, it starts
+    # the wrapper '/usr/bin/kvm'. Both spellings are accepted.
     showcmd="$(ex_out "qm showcmd ${vmid} 2>/dev/null | head -1")"
-    ex_assert_contains "qm showcmd prints the QEMU command line" "${showcmd}" "qemu-system"
+    if printf '%s' "${showcmd}" | grep -qE 'qemu-system|/usr/bin/kvm'; then
+        ex_pass "qm showcmd prints the QEMU command line"
+    else
+        ex_fail "qm showcmd prints the QEMU command line"
+    fi
 
-    if ex_out "ps aux | grep '[q]emu-system'" | grep -q "guest=${vmid}"; then
+    # The process of a guest carries '-id <vmid>'.
+    if ex_out "ps aux | grep -E '[q]emu-system|[/]usr/bin/kvm'" | grep -q -- "-id ${vmid}"; then
         ex_pass "the QEMU process of VM ${vmid} is running"
     else
         ex_fail "the QEMU process of VM ${vmid} is running"

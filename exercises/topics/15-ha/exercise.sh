@@ -42,7 +42,7 @@ ex_assert_not_empty "the HA group prod-nodes exists" "${group}"
 
 if [ -n "${group}" ]; then
     groupnodes="$(ex_out "ha-manager group prod-nodes --output-format json 2>/dev/null \
-        | jq -r '.nodes // [] | join(\",\")'")"
+        | /opt/exercises/lib/ex-json.sh '.nodes // [] | join(\",\")'")"
     ex_assert_contains "the group contains pve1" "${groupnodes}" "pve1"
     ex_assert_contains "the group contains pve2" "${groupnodes}" "pve2"
     ex_assert_contains "the group contains pve3" "${groupnodes}" "pve3"
@@ -61,15 +61,19 @@ ex_assert_contains "VM 101 is HA managed" "${managed}" "101"
 ex_assert_contains "CT 301 is HA managed" "${managed}" "301"
 
 # The state of each resource.
+#
+# The filter is built on the node, so the resource ID can be put into it
+# directly. The ID contains a colon ('vm:100'), which is safe inside a
+# jq string.
 for res in vm:100 vm:101 ct:301; do
     state="$(ex_out "ha-manager status --output-format json 2>/dev/null \
-        | jq -r --arg r \"${res}\" '.[] | select(.id==\$r) | .status'")"
+        | /opt/exercises/lib/ex-json.sh '.[] | select(.id == \"${res}\") | .status'")"
     ex_assert_eq "${res} is in the started state" "started" "${state}"
 done
 
 # A configured node.
 configured="$(ex_out "ha-manager status --output-format json 2>/dev/null \
-    | jq -r '[.[] | select(.type==\"vm\" or .type==\"ct\") | select(.status==\"started\") | .node] | length'")"
+    | /opt/exercises/lib/ex-json.sh '[.[] | select(.type==\"vm\" or .type==\"ct\") | select(.status==\"started\") | .node] | length'")"
 case "${configured}" in
     ''|*[!0-9]*) ex_skip "the configured nodes cannot be counted" ;;
     *)
@@ -88,7 +92,7 @@ ex_section "The policies"
 
 for res in vm:100 vm:101 ct:301; do
     maxrestart="$(ex_out "ha-manager config --${res} --output-format json 2>/dev/null \
-        | jq -r '.max_restart // 0'")"
+        | /opt/exercises/lib/ex-json.sh '.max_restart // 0'")"
     case "${maxrestart}" in
         ''|*[!0-9]*) ex_skip "the restart policy of ${res} cannot be read" ;;
         *)
@@ -101,7 +105,7 @@ for res in vm:100 vm:101 ct:301; do
     esac
 
     maxrelocate="$(ex_out "ha-manager config --${res} --output-format json 2>/dev/null \
-        | jq -r '.max_relocate // 0'")"
+        | /opt/exercises/lib/ex-json.sh '.max_relocate // 0'")"
     case "${maxrelocate}" in
         ''|*[!0-9]*) ex_skip "the relocate policy of ${res} cannot be read" ;;
         *)

@@ -123,7 +123,7 @@ tokens="$(ex_out "pveum user token list automation@pve 2>/dev/null")"
 ex_assert_contains "the token terraform exists" "${tokens}" "terraform"
 
 privsep="$(ex_out "pveum user token list automation@pve --output-format json 2>/dev/null \
-    | jq -r '.[] | select(.tokenid==\"terraform\") | .privsep'")"
+    | /opt/exercises/lib/ex-json.sh '.[] | select(.tokenid==\"terraform\") | .privsep'")"
 ex_assert_eq "the token has privilege separation enabled" "1" "${privsep}"
 
 token_acl="$(ex_out "pveum acl list 2>/dev/null | grep 'automation@pve!terraform'")"

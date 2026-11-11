@@ -55,7 +55,8 @@ Usage:
 
 Options:
   --dry-run       Show what would be removed, change nothing
-  --yes           Do not ask for confirmation
+  --yes           Do not ask the ordinary yes/no question
+                  (the destruction guard still asks for a typed phrase)
   --keep-amis     Keep the AMIs (the next provisioning run starts faster)
   --keep-state    Keep .state/lab.json and the generated .env
   --skip-cluster  Do not touch the cluster, only remove the AWS resources
@@ -224,7 +225,7 @@ destroy_cluster() {
     local node reachable=0
     for node in $(lab_node_list); do
         local priv
-        priv="$(state_get ".instances.${node}.private_ip")"
+        priv="$(state_reach_ip "${node}")"
         if ssh_exec_q "${priv}" "true"; then
             reachable=1
             break
@@ -439,9 +440,24 @@ main() {
 
     if [ "${DRY_RUN}" = "1" ]; then
         log_warn "Dry run - nothing will be changed."
-    elif [ "${ASSUME_YES}" != "1" ]; then
-        if ! confirm "Destroy the entire lab and every AWS resource?" "no"; then
-            log_info "Aborted."
+    else
+        # The destruction guard. It is not skipped by --yes: the flag only
+        # skips the ordinary yes/no question, the guard always asks for
+        # the typed phrase.
+        local what="the guests (VMs and containers) on every node
+the cluster configuration of pve1, pve2 and pve3
+the contents of the shared NFS export
+every EC2 instance of the lab
+every EBS volume of the lab
+the VPC, the subnets, the route tables, the internet gateways,
+the security groups and the network interfaces of the lab
+the key pair
+the AMIs and their snapshots
+the state file, the generated .env and the diagnostic reports"
+
+        if ! lab_confirm_destruction "${LAB_CONFIRM_PHRASE_AWS}" \
+                "Destroy the entire lab and every AWS resource?" "${what}"; then
+            log_info "Aborted - nothing was destroyed."
             return 0
         fi
     fi

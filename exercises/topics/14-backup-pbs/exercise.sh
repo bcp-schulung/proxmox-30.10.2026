@@ -81,7 +81,7 @@ ex_assert_contains "a backup of CT 301 exists" "${backups}" "lxc/301"
 ex_section "The restore"
 
 restored="$(ex_out "pvesh get /cluster/resources --type vm --output-format json 2>/dev/null \
-    | jq -r '.[] | select(.vmid >= 190) | .vmid' | sort -n | head -1")"
+    | /opt/exercises/lib/ex-json.sh '.[] | select(.vmid >= 190) | .vmid' | sort -n | head -1")"
 
 if [ -n "${restored}" ]; then
     ex_pass "a restored VM exists (VMID ${restored})"

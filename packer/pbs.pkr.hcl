@@ -46,7 +46,7 @@ variable "subnet_id" {
 
 variable "build_instance_type" {
   type        = string
-  default     = "m8i.4xlarge"
+  default     = "m7i.2xlarge"
   description = "Instance type used while building the AMI"
 }
 
@@ -95,21 +95,43 @@ build {
   name    = "proxmox-backup-server"
   sources = ["source.amazon-ebs.pbs"]
 
+  # The shared helpers are uploaded next to the build scripts. Packer runs
+  # a script from /tmp, so the scripts cannot find the helpers through
+  # BASH_SOURCE.
   provisioner "shell" {
-    script = "${path.root}/scripts/01-base.sh"
+    inline = ["mkdir -p /tmp/pve-build"]
+  }
+
+  provisioner "file" {
+    source      = "${path.root}/scripts/lib-common.sh"
+    destination = "/tmp/pve-build/lib-common.sh"
   }
 
   provisioner "shell" {
-    script  = "${path.root}/scripts/40-pbs-install.sh"
-    timeout = "30m"
+    script           = "${path.root}/scripts/01-base.sh"
+    environment_vars = ["PACKER_SCRIPTS_DIR=/tmp/pve-build"]
+  }
+
+  # The SSM agent, so that the PBS instance is reachable from a CGNAT
+  # network where the public IPv4 address does not work.
+  provisioner "shell" {
+    script           = "${path.root}/scripts/05-ssm-agent.sh"
+    environment_vars = ["PACKER_SCRIPTS_DIR=/tmp/pve-build"]
+  }
+
+  provisioner "shell" {
+    script           = "${path.root}/scripts/40-pbs-install.sh"
+    timeout          = "45m"
+    environment_vars = ["PACKER_SCRIPTS_DIR=/tmp/pve-build"]
   }
 
   provisioner "shell" {
     inline = [
       "sudo proxmox-backup-manager versions",
       "sudo systemctl is-active proxmox-backup.service",
+      "systemctl is-enabled amazon-ssm-agent || systemctl is-enabled ssm-agent",
     ]
-    timeout = "10m"
+    timeout = "15m"
   }
 
   post-processor "manifest" {

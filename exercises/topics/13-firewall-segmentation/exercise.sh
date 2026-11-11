@@ -62,7 +62,7 @@ ex_assert_not_contains "no rule accepts traffic from ::/0" \
 
 # A rule without a destination accepts everything on every port.
 any_dest="$(ex_out "pvesh get /cluster/firewall/rules --output-format json 2>/dev/null \
-    | jq -r '[.[] | select(.dport == null and .dest == null)] | length'")"
+    | /opt/exercises/lib/ex-json.sh '[.[] | select(.dport == null and .dest == null)] | length'")"
 case "${any_dest}" in
     ''|*[!0-9]*) ex_skip "the rules without a destination cannot be counted" ;;
     *)

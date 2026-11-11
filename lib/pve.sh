@@ -15,26 +15,48 @@ __LAB_PVE_SOURCED=1
 . "${LAB_LIB_DIR}/common.sh"
 # shellcheck source=lib/config.sh
 . "${LAB_LIB_DIR}/config.sh"
+# shellcheck source=lib/state.sh
+. "${LAB_LIB_DIR}/state.sh"
 # shellcheck source=lib/ssh.sh
 . "${LAB_LIB_DIR}/ssh.sh"
+# The node list is needed to tell a node name apart from a host address.
+# shellcheck source=lib/lab.sh
+. "${LAB_LIB_DIR}/lab.sh"
 
 # Run a command on a node with proper shell quoting.
 # pve_cmd <host> <command> [args...]
 # The Proxmox CLI has to run as root. The Debian cloud image logs in as the
 # unprivileged "admin" user, so every command is run through sudo.
+#
+# The first argument is either a host address or the name of a lab node. When
+# it is a node name, the command goes over the transport that actually works
+# for that node - SSH or the Systems Manager. This matters because the
+# operator's network often cannot reach the instance addresses.
 pve_cmd() {
     local host="$1"; shift
     local cmd
-    cmd="$(printf '%q ' "$@")"
-    ssh_exec "${host}" "sudo ${cmd}"
+    # A single argument is a command line and is passed through as it is.
+    # That is what makes the shell pipelines and the command substitutions
+    # work. More than one argument is a command with its arguments, and
+    # every one of them is quoted.
+    if [ "$#" -eq 1 ]; then
+        cmd="$1"
+    else
+        cmd="$(printf '%q ' "$@")"
+    fi
+    pve_exec "${host}" "sudo ${cmd}"
 }
 
 # Same, but discards stdout and only reports success/failure.
 pve_cmd_q() {
     local host="$1"; shift
     local cmd
-    cmd="$(printf '%q ' "$@")"
-    ssh_exec_q "${host}" "sudo ${cmd}"
+    if [ "$#" -eq 1 ]; then
+        cmd="$1"
+    else
+        cmd="$(printf '%q ' "$@")"
+    fi
+    pve_exec_q "${host}" "sudo ${cmd}"
 }
 
 # Run a Proxmox command on a node and print its stdout. stderr is passed
@@ -43,9 +65,82 @@ pve_cmd_q() {
 pve_cmd_out() {
     local host="$1"; shift
     local cmd
-    cmd="$(printf '%q ' "$@")"
-    # shellcheck disable=SC2046
-    ssh $(ssh_options) "${SSH_USER}@${host}" "sudo ${cmd}"
+    if [ "$#" -eq 1 ]; then
+        cmd="$1"
+    else
+        cmd="$(printf '%q ' "$@")"
+    fi
+    pve_exec_out "${host}" "sudo ${cmd}"
+}
+
+# ---------------------------------------------------------------------------
+# The transport
+# ---------------------------------------------------------------------------
+#
+# A host address is reached over SSH. A node name is reached over the
+# transport that the transport_for helper has chosen for it. The two are
+# told apart by looking the host up in the state file.
+# ---------------------------------------------------------------------------
+
+# The node name for a host address, or an empty string when the host is not
+# a known node.
+pve_host_node() {
+    local host="$1" node
+
+    for node in $(lab_node_list 2>/dev/null); do
+        local reach priv pub
+        reach="$(state_reach_ip "${node}" 2>/dev/null || true)"
+        priv="$(state_get ".instances.${node}.private_ip" 2>/dev/null || true)"
+        pub="$(state_get ".instances.${node}.public_ip" 2>/dev/null || true)"
+
+        if [ "${host}" = "${reach}" ] || [ "${host}" = "${priv}" ] || [ "${host}" = "${pub}" ] \
+           || [ "${host}" = "${node}" ]; then
+            printf '%s' "${node}"
+            return 0
+        fi
+    done
+
+    printf ''
+}
+
+# Run a command on a node or a host address.
+pve_exec() {
+    local host="$1"; shift
+    local node
+    node="$(pve_host_node "${host}")"
+
+    if [ -n "${node}" ]; then
+        lab_exec "${node}" "$@"
+    else
+        ssh_exec "${host}" "$@"
+    fi
+}
+
+# Same, but discards stdout and only reports success/failure.
+pve_exec_q() {
+    local host="$1"; shift
+    local node
+    node="$(pve_host_node "${host}")"
+
+    if [ -n "${node}" ]; then
+        lab_exec_q "${node}" "$@"
+    else
+        ssh_exec_q "${host}" "$@"
+    fi
+}
+
+# Same, but prints stdout and passes stderr through.
+pve_exec_out() {
+    local host="$1"; shift
+    local node
+    node="$(pve_host_node "${host}")"
+
+    if [ -n "${node}" ]; then
+        lab_exec "${node}" "$@"
+    else
+        # shellcheck disable=SC2046
+        ssh $(ssh_options) "${SSH_USER}@${host}" "$@"
+    fi
 }
 
 # Run a Proxmox command on the node that currently holds the cluster (any
@@ -66,15 +161,135 @@ pve_cluster_create() {
     pve_cmd "${host}" pvecm create "${cluster}" --link0 "${link0}" --nodeid "${nodeid}"
 }
 
-# pve_cluster_join <host> <seed-host> <link0-ip> <nodeid> <fingerprint>
+# pve_cluster_join <host> <seed-host> <link0-ip> <nodeid> <fingerprint> [seed-ring-ip]
+#
+# 'pvecm add --use_ssh' distributes the cluster SSH keys with
+# 'ssh-copy-id'. That command verifies the host key of the seed node and
+# refuses to continue when the key is not known:
+#
+#   ERROR: Host key verification failed.
+#
+# The known hosts file of a Proxmox node lives in the cluster filesystem
+# (/etc/pve/priv/known_hosts), which only exists once the node is part of
+# a cluster. A node that is joining therefore has no known host for the
+# seed node, and the join fails.
+#
+# The host key of the seed node is therefore fetched from the seed node
+# itself and written into the local known hosts file before the join.
 pve_cluster_join() {
     local host="$1" seed="$2" link0="$3" nodeid="$4" fingerprint="$5"
+    local seed_ring="${6:-}"
+
     log_info "Joining ${host} to the cluster via ${seed}"
+
+    # The address of the seed node has to be of the same address family
+    # as the ring address of the joining node. Otherwise corosync builds
+    # a configuration with mixed families and refuses to start.
+    if [ -n "${seed_ring}" ]; then
+        seed="${seed_ring}"
+    fi
+
+    # The host key of the seed node, read from the seed node itself. The
+    # private address of the seed node is used, because that is the
+    # address the cluster members talk to each other on.
+    local seed_key seed_ip
+    # The address is taken with cut and not with awk: the command
+    # quoting of the transport layer would escape the dollar sign of the
+    # awk expression, and awk would then fail to parse it.
+    seed_ip="$(pve_cmd_out "${seed}" "hostname -I 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+\.' | head -1" 2>/dev/null | tr -d '\r' | head -1)"
+    [ -n "${seed_ip}" ] || seed_ip="${seed}"
+
+    # The public host keys of the seed node. Reading them from the seed
+    # node itself is more reliable than scanning the network: the scan
+    # needs a working SSH daemon and returns nothing when the firewall
+    # drops the probe.
+    seed_key="$(pve_cmd_out "${seed}" "cat /etc/ssh/ssh_host_rsa_key.pub /etc/ssh/ssh_host_ed25519_key.pub /etc/ssh/ssh_host_ecdsa_key.pub 2>/dev/null" 2>/dev/null | tr -d '\r' | cut -d' ' -f1,2 | sed "s|^|${seed_ip} |" | sort -u || true)"
+
+    if [ -z "${seed_key}" ]; then
+        # The scan is the second chance.
+        seed_key="$(pve_cmd_out "${seed}" "ssh-keyscan -T 10 -t rsa,ecdsa,ed25519 ${seed_ip} 2>/dev/null | sort -u" 2>/dev/null | tr -d '\r' || true)"
+    fi
+
+    if [ -n "${seed_key}" ]; then
+        log_info "Adding the host key of the seed node to the known hosts of ${host}"
+
+        # The known hosts file is base64 encoded, so that the quoting of
+        # the shell and of the AWS CLI cannot mangle it.
+        local encoded
+        encoded="$(printf '%s\n' "${seed_key}" | base64 | tr -d '\n')"
+
+        # OpenSSH looks for the file in /root/.ssh/known_hosts. On a node
+        # that is not clustered yet, that is a real file - the cluster
+        # file is a symlink to the system file.
+        pve_cmd_q "${host}" "sudo mkdir -p /root/.ssh /etc/pve/priv && sudo touch /root/.ssh/known_hosts && sudo chmod 644 /root/.ssh/known_hosts"
+        pve_cmd_q "${host}" "printf '%s' '${encoded}' | base64 -d | sudo tee -a /root/.ssh/known_hosts >/dev/null"
+
+        # The system wide file as well. The Proxmox code copies the
+        # cluster file into it when the path is a symlink, but a node that
+        # is not clustered yet has a real file there.
+        pve_cmd_q "${host}" "sudo touch /etc/ssh/ssh_known_hosts && sudo chmod 644 /etc/ssh/ssh_known_hosts"
+        pve_cmd_q "${host}" "printf '%s' '${encoded}' | base64 -d | sudo tee -a /etc/ssh/ssh_known_hosts >/dev/null"
+    else
+        log_warn "Could not read the host key of the seed node - the join may fail"
+    fi
+
     pve_cmd "${host}" pvecm add "${seed}" \
         --link0 "${link0}" \
         --nodeid "${nodeid}" \
         --fingerprint "${fingerprint}" \
         --use_ssh
+
+    # 'pvecm add' reports a success even when the join failed.
+    #
+    # The corosync service is started asynchronously, so the command
+    # returns before the configuration has been written and before
+    # corosync has had a chance to reject the configuration. The two
+    # failure modes that are seen in practice are:
+    #
+    #   * the host key of the seed node is not known, and ssh-copy-id
+    #     refuses to continue
+    #   * the nodes of the ring use different address families, and
+    #     corosync refuses to start
+    #
+    # Both are caught by looking at the result: the configuration has to
+    # exist, and the node has to be a member of the cluster.
+    # The proof that the join worked is the membership, not the presence
+    # of the configuration file. The file is written by the cluster
+    # service a moment after the join command returned, so a check for
+    # the file alone races with the join.
+    local waited=0
+    while [ "${waited}" -lt 90 ]; do
+        if pve_cmd_q "${host}" "pvecm nodes 2>/dev/null | grep -qE '^[[:space:]]*[0-9]+[[:space:]]+[0-9]+[[:space:]]+'"; then
+            break
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+
+    if ! pve_cmd_q "${host}" "pvecm nodes 2>/dev/null | grep -qE '^[[:space:]]*[0-9]+[[:space:]]+[0-9]+[[:space:]]+'"; then
+        log_error "The join of ${host} failed: the node is not a member of the cluster."
+        pve_cmd_out "${host}" "pvecm status 2>&1 | head -20" 2>/dev/null | sed 's/^/    /' || true
+        return 1
+    fi
+
+    # The corosync service has to be running. A configuration that
+    # corosync rejects leaves the service inactive.
+    waited=0
+    while [ "${waited}" -lt 60 ]; do
+        if pve_cmd_q "${host}" "systemctl is-active --quiet corosync"; then
+            break
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+
+    if ! pve_cmd_q "${host}" "systemctl is-active --quiet corosync"; then
+        log_error "The join of ${host} failed: corosync did not start."
+        pve_cmd_out "${host}" "journalctl -u corosync --no-pager -n 10" 2>/dev/null | sed 's/^/    /' || true
+        return 1
+    fi
+
+    return 0
 }
 
 pve_cluster_status() {
@@ -172,7 +387,9 @@ hostname_on() {
 pve_download() {
     local host="$1" url="$2" dest="$3"
     log_info "Downloading ${url}"
-    pve_cmd "${host}" "curl -fSL --retry 3 --retry-delay 5 -o '${dest}.part' '${url}' && mv -f '${dest}.part' '${dest}'"
+    # The download and the move both run as root: the target is under
+    # /var/lib/vz, which the unprivileged admin user cannot write to.
+    pve_cmd "${host}" "sudo curl -fSL --retry 3 --retry-delay 5 -o '${dest}.part' '${url}' && sudo mv -f '${dest}.part' '${dest}'"
 }
 
 # Write a cloud-init user-data snippet to a node.
@@ -206,7 +423,7 @@ runcmd:
   - [ sh, -c, "printf 'provisioned-by-proxmox-seminar-lab\\n' > /etc/lab-provisioned" ]
 EOF
 )"
-    printf '%s\n' "${content}" | ssh_exec "${host}" "cat > '${remote}' && chmod 600 '${remote}'"
+    printf '%s\n' "${content}" | pve_exec "${host}" "cat > '${remote}' && chmod 600 '${remote}'"
     printf '%s' "${remote}"
 }
 
@@ -251,14 +468,45 @@ pve_vm_make_template() {
 }
 
 # Clone a template. mode: full | linked
+#
+# pve_vm_clone <source-host> <src-vmid> <newid> <name> <storage> <mode> [target-node]
+#
+# The clone is always started on the node that holds the template. The
+# target node is passed with --target, so that Proxmox creates the clone
+# there.
+#
+# Running the clone on the target node does not work: the configuration
+# of a template is only known to the node that owns it, and the other
+# node answers with
+#
+#   unable to find configuration file for VM 9000 on node 'pve2'
+#
 pve_vm_clone() {
     local host="$1" src="$2" newid="$3" name="$4" storage="$5" mode="$6"
-    log_info "Cloning VM ${src} -> ${newid} (${name}, ${mode} clone)"
-    if [ "${mode}" = "linked" ]; then
-        pve_cmd "${host}" qm clone "${src}" "${newid}" --name "${name}" --full 0 --storage "${storage}"
-    else
-        pve_cmd "${host}" qm clone "${src}" "${newid}" --name "${name}" --full 1 --storage "${storage}"
+    local target="${7:-}"
+    log_info "Cloning VM ${src} -> ${newid} (${name}, ${mode} clone${target:+, on ${target}})"
+
+    local full=1
+    [ "${mode}" = "linked" ] && full=0
+
+    local target_opt=""
+    if [ -n "${target}" ]; then
+        target_opt="--target ${target}"
     fi
+
+    # A linked clone is a reference to the template's disk and cannot
+    # live on a different storage than the template. Proxmox refuses the
+    # request with
+    #
+    #   parameter 'storage' not allowed for linked clones
+    #
+    # so the storage is only given for a full clone.
+    local storage_opt=""
+    if [ "${full}" = "1" ]; then
+        storage_opt="--storage ${storage}"
+    fi
+
+    pve_cmd "${host}" "qm clone ${src} ${newid} --name '${name}' --full ${full} ${storage_opt} ${target_opt}"
 }
 
 # Apply the cloud-init configuration to a clone (clones inherit the drive but

@@ -44,23 +44,21 @@ ex_assert_eq "the cluster has three members" "3" "${members}"
 
 ex_assert_eq "the cluster is quorate" "yes" "$(ex_quorate)"
 
-cluster_name="$(printf '%s' "${status}" | grep -i 'cluster name' | tr -s ' ' | cut -d' ' -f4)"
-if [ -z "${cluster_name}" ]; then
-    cluster_name="$(ex_out "pvecm status 2>/dev/null | grep -i '^Cluster' | tr -s ' ' | cut -d' ' -f2")"
-fi
-ex_assert_eq "the cluster is called prod-cluster" "prod-cluster" "${cluster_name}"
+ex_assert_eq "the cluster is called prod-cluster" "prod-cluster" "$(ex_cluster_name)"
 
-quorum="$(printf '%s' "${status}" | grep -i 'quorum' | tr -s ' ' | cut -d' ' -f3)"
-ex_assert_eq "the quorum is 2" "2" "${quorum}"
+ex_assert_eq "the quorum is 2" "2" "$(ex_quorum)"
 
 nodes="$(ex_nodes | sort | tr '\n' ' ')"
 ex_assert_contains "pve1 is a member" "${nodes}" "pve1"
 ex_assert_contains "pve2 is a member" "${nodes}" "pve2"
 ex_assert_contains "pve3 is a member" "${nodes}" "pve3"
 
-# Every member is in the state "Member", not "Left" or "Old".
-member_states="$(ex_out "pvecm nodes 2>/dev/null | tail -n +2 | cut -d' ' -f4 | sort -u | tr '\n' ' '")"
-ex_assert_eq "every member is in the state Member" "Member " "${member_states}"
+# Every member is listed with a vote - a member that left has no votes
+# any more, and a member that is only a name without a vote is not part
+# of the ring.
+member_count="$(ex_out "pvecm nodes 2>/dev/null \
+    | grep -cE '^[[:space:]]*[0-9]+[[:space:]]+[0-9]+[[:space:]]+[a-zA-Z0-9._-]+'")"
+ex_assert_eq "every member has a vote" "3" "${member_count}"
 
 # =============================================================================
 # The services
@@ -80,7 +78,23 @@ ex_section "The SSH keys"
 ex_assert "a private SSH key exists in /root/.ssh" \
     "ls /root/.ssh/ 2>/dev/null | grep -qE '^id_(ed25519|rsa)$'"
 
-known="$(ex_out "grep -c '10.20.0' /root/.ssh/known_hosts 2>/dev/null")"
+# The known hosts of the other nodes.
+#
+# After a cluster join the file lives in the cluster filesystem, in
+# /etc/pve/priv/known_hosts. A node that is not clustered yet has a plain
+# file in /root/.ssh/known_hosts instead - that is where the keys have to
+# be put BEFORE the join, because 'pvecm add --use_ssh' verifies the host
+# key of the seed node.
+#
+# Both locations are accepted.
+#
+# The entries are host keys - a hostname or an address, then the key
+# type, then the key itself. The file may use a hostname ('pve1') or an
+# address ('10.20.0.246'), and it may use the comma separated form for
+# several names on one line. Counting the key types is the only thing
+# that works for all of those forms.
+known="$(ex_out "cat /etc/pve/priv/known_hosts /root/.ssh/known_hosts 2>/dev/null \
+    | grep -cE '(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp[0-9]+)[[:space:]]'")"
 if ! printf '%s' "${known}" | grep -qE '^[0-9]+$'; then
     ex_fail "the known_hosts file contains the other nodes"
 elif [ "${known}" -ge 2 ]; then
@@ -94,8 +108,7 @@ fi
 # =============================================================================
 ex_section "The shared configuration"
 
-fstype="$(ex_out "stat -f -c '%T' /etc/pve 2>/dev/null")"
-ex_assert_eq "/etc/pve is a pmxcfs mount" "fuse.pmxcfs" "${fstype}"
+ex_assert_eq "/etc/pve is a pmxcfs mount" "yes" "$(ex_is_pmxcfs)"
 
 marker="/etc/pve/.exercise-cluster-test"
 
@@ -106,18 +119,13 @@ if ex_ok "echo 'cluster filesystem test' > ${marker}"; then
         "${visible}" "cluster filesystem test"
 
     # It has to be visible on the other nodes as well.
-    remote="$(ex_run "
-        for n in \$(pvecm nodes | awk 'NR>1 && \\\$3 ~ /^[0-9]+\\\$/ {print \\\$3}'); do
-            [ \"\$n\" = \"\$(hostname)\" ] && continue
-            if ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 \
-                   \"root@\$n\" 'cat ${marker}' 2>/dev/null | grep -q 'cluster filesystem test'; then
-                echo \"\$n\"
-                break
-            fi
-        done" 2>/dev/null)"
+    #
+    # The check runs on the node itself and uses the cluster's own SSH key
+    # to look at the other members.
+    remote="$(ex_remote_members "cat ${marker}")"
 
-    if [ -n "${remote}" ]; then
-        ex_pass "the file is visible on another node (${remote})"
+    if printf '%s' "${remote}" | grep -q 'cluster filesystem test'; then
+        ex_pass "the file is visible on another node"
     else
         ex_fail "the file is visible on another node"
     fi

@@ -101,6 +101,50 @@ detect_caller_ip() {
     fi
 }
 
+# Detect the operator's public IPv6 address.
+#
+# The IPv4 address is very often a CGNAT translation, and EC2 instance public
+# IPs are unreachable from such a network. The IPv6 address is not translated,
+# so it is the address that actually works for reaching the nodes.
+#
+# Two things matter here:
+#
+#   * The result must really be IPv6. api64.ipify.org falls back to IPv4 when
+#     the host has no IPv6 route, and an IPv4 address in a security group
+#     Ipv6Ranges field is rejected by the API.
+#   * The stable address is preferred over the temporary one. macOS keeps a
+#     temporary address (privacy extensions) that rotates, so a rule built
+#     from it stops working after a while.
+detect_caller_ipv6() {
+    local ip="" stable="" dev
+
+    # Ask for an IPv6-only answer.
+    ip="$(curl -6 -fsS --max-time 5 https://api64.ipify.org 2>/dev/null || true)"
+    ip="$(printf '%s' "${ip}" | tr -d '[:space:]')"
+    if ! printf '%s' "${ip}" | grep -Eq '^[0-9a-fA-F]{0,4}:[0-9a-fA-F:]+$'; then
+        return 0
+    fi
+
+    # Prefer the stable (autoconf) address of the interface that carries the
+    # default IPv6 route. The temporary address rotates.
+    if command -v ipconfig >/dev/null 2>&1; then
+        dev="$(route -n get -inet6 default 2>/dev/null | awk '/interface:/{print $2}')"
+        if [ -n "${dev}" ] && [ "${dev}" != "lo" ]; then
+            stable="$(ifconfig "${dev}" 2>/dev/null \
+                | awk '/inet6 /{print $2}' \
+                | grep -v '^fe80:' \
+                | grep -v '::' \
+                | head -1)"
+        fi
+    fi
+
+    if [ -n "${stable}" ]; then
+        printf '%s' "${stable}"
+        return 0
+    fi
+    printf '%s' "${ip}"
+}
+
 # Validate the configuration before touching AWS. Fails fast with a clear
 # message rather than half way through a provision run.
 validate_config() {

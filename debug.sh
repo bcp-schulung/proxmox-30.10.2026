@@ -147,10 +147,11 @@ debug_aws() {
             report FAIL "${node}: instance ${instance_id} is ${state:-unknown}"
         fi
 
-        local priv pub
-        priv="$(state_get ".instances.${node}.private_ip")"
+        local priv pub v6
+        priv="$(state_reach_ip "${node}")"
         pub="$(state_get ".instances.${node}.public_ip")"
-        report INFO "${node}: private=${priv} public=${pub}"
+        v6="$(state_get ".instances.${node}.ipv6")"
+        report INFO "${node}: reach=${priv} public=${pub} ipv6=${v6:-none}"
 
         # The instance must have nested virtualization enabled, otherwise the
         # Proxmox guests cannot run.
@@ -196,29 +197,42 @@ debug_aws() {
 debug_reachability() {
     section "3. Reachability from this machine"
 
-    local node pub
+    # The operator's own addresses. The IPv4 address is very often a CGNAT
+    # translation, and EC2 instance public IPv4 addresses are unreachable
+    # from such a network - so both are reported.
+    local caller4 caller6
+    caller4="$(detect_caller_ip)"
+    caller6="$(detect_caller_ipv6)"
+    report INFO "operator IPv4: ${caller4:-none}"
+    report INFO "operator IPv6: ${caller6:-none}"
+    if [ -z "${caller6}" ]; then
+        report WARN "no usable IPv6 - the lab is only reachable over IPv4"
+    fi
+
+    # The address the harness uses for each node.
+    local node reach
     for node in $(lab_node_list); do
-        pub="$(state_get ".instances.${node}.public_ip")"
-        [ -n "${pub}" ] || continue
-        if wait_tcp "${pub}" 22 5; then
-            report PASS "${node}: SSH (22) reachable at ${pub}"
+        reach="$(state_reach_ip "${node}")"
+        [ -n "${reach}" ] || continue
+        if wait_tcp "${reach}" 22 5; then
+            report PASS "${node}: SSH (22) reachable at ${reach}"
         else
-            report FAIL "${node}: SSH (22) NOT reachable at ${pub} - check the security group and the operator IP"
+            report FAIL "${node}: SSH (22) NOT reachable at ${reach} - check the security group and the operator IP"
         fi
-        if wait_tcp "${pub}" 8006 5; then
-            report PASS "${node}: web UI (8006) reachable at ${pub}"
+        if wait_tcp "${reach}" 8006 5; then
+            report PASS "${node}: web UI (8006) reachable at ${reach}"
         else
-            report FAIL "${node}: web UI (8006) NOT reachable at ${pub}"
+            report FAIL "${node}: web UI (8006) NOT reachable at ${reach}"
         fi
     done
 
-    local pbs_pub
-    pbs_pub="$(state_get ".instances.pbs1.public_ip")"
-    if [ -n "${pbs_pub}" ]; then
-        if wait_tcp "${pbs_pub}" 8007 5; then
-            report PASS "pbs1: PBS web UI (8007) reachable at ${pbs_pub}"
+    local pbs_reach
+    pbs_reach="$(state_reach_ip "pbs1")"
+    if [ -n "${pbs_reach}" ]; then
+        if wait_tcp "${pbs_reach}" 8007 5; then
+            report PASS "pbs1: PBS web UI (8007) reachable at ${pbs_reach}"
         else
-            report FAIL "pbs1: PBS web UI (8007) NOT reachable at ${pbs_pub}"
+            report FAIL "pbs1: PBS web UI (8007) NOT reachable at ${pbs_reach}"
         fi
     fi
 }
@@ -227,7 +241,7 @@ debug_node() {
     # debug_node <node>
     local node="$1"
     local priv
-    priv="$(state_get ".instances.${node}.private_ip")"
+    priv="$(state_reach_ip "${node}")"
 
     section "4. Node ${node} (${priv})"
 
@@ -372,12 +386,12 @@ debug_cluster_connectivity() {
     local first node
     first="$(lab_node_list | head -1)"
     local first_priv
-    first_priv="$(state_get ".instances.${first}.private_ip")"
+    first_priv="$(state_reach_ip "${first}")"
 
     for node in $(lab_node_list); do
         [ "${node}" = "${first}" ] && continue
         local target_priv
-        target_priv="$(state_get ".instances.${node}.private_ip")"
+        target_priv="$(state_reach_ip "${node}")"
 
         # Corosync uses the KNET UDP port range.
         if ssh_exec_q "${first_priv}" "timeout 5 bash -c 'cat < /dev/null > /dev/udp/${target_priv}/5405' 2>/dev/null"; then
@@ -410,7 +424,7 @@ debug_guests() {
 
     local node priv
     for node in $(lab_node_list); do
-        priv="$(state_get ".instances.${node}.private_ip")"
+        priv="$(state_reach_ip "${node}")"
         ssh_exec_q "${priv}" "true" || continue
 
         local vmid name status

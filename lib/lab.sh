@@ -62,6 +62,26 @@ lab_node_list() {
     printf '%s\n' ${PVE_NODE_NAMES}
 }
 
+# lab_reach_ip <instance-name> -> the address the operator uses to reach a node.
+#
+# This is the IPv6 address when the instance has one. The private IPv4
+# address is only reachable from inside the VPC, and the public IPv4
+# address is unreachable from a CGNAT network, so the IPv6 address is the
+# one that works from the operator's laptop.
+lab_reach_ip() {
+    state_reach_ip "$1"
+}
+
+# lab_url_host <address> - the address as it appears in a URL or an ssh
+# command line. An IPv6 literal has to be bracketed, otherwise the colons
+# are read as a port separator.
+lab_url_host() {
+    case "$1" in
+        *:*) printf '[%s]' "$1" ;;
+        *)   printf '%s' "$1" ;;
+    esac
+}
+
 # lab_node_index <name> -> 1-based index
 lab_node_index() {
     local name="$1" i=1 n
@@ -181,6 +201,9 @@ lab_phase_foundation() {
 
     lab_create_route_tables "${igw}" "${natgw}"
 
+    # --- IPv6 ---
+    lab_create_ipv6
+
     # --- security groups ---
     lab_create_security_groups
 
@@ -197,11 +220,30 @@ lab_phase_foundation() {
     fi
     state_set ".keypair" "\"${PVE_KEYPAIR_NAME}\""
 
+    # --- SSM instance profile ---
+    # The SSM agent on the instances opens an outbound connection to the
+    # Systems Manager control plane. That is the only connection method that
+    # works from a CGNAT network, where the EC2 public IPv4 address is
+    # unreachable and native IPv6 is often missing too.
+    local profile
+    profile="$(aws_ssm_instance_profile_create)"
+    log_ok "SSM instance profile ${profile} ready"
+    state_set ".ssm.profile" "\"${profile}\""
+
     state_set_phase "foundation"
 }
 
-# The public subnet routes straight to the internet gateway so the nodes keep
-# their public IP. The services subnet routes through the NAT gateway.
+# Both subnets route straight to the internet gateway.
+#
+# The services subnet used to route through the NAT gateway, on the theory
+# that the service instances do not need to be reachable from outside. That
+# is wrong: a NAT gateway translates outbound traffic only, so the NFS
+# server and the backup server had no inbound path at all. Not even from
+# inside the VPC, and not even for the SSH server that the operator needs
+# to configure the backup server.
+#
+# The route to the internet gateway gives the services a public IPv4
+# address that the operator can reach, exactly like the Proxmox nodes.
 # The default route table is left alone on purpose - it must not send the
 # public subnet through the NAT gateway, or the public IP would be lost.
 lab_create_route_tables() {
@@ -224,10 +266,122 @@ lab_create_route_tables() {
         rtb_private="$(aws_create_route_table "private")"
         state_set ".rtb.private" "\"${rtb_private}\""
     fi
-    aws_route_to "${rtb_private}" "0.0.0.0/0" "${natgw}" "nat-gateway" 2>/dev/null || true
+
+    # The route to the internet gateway replaces the route to the NAT
+    # gateway. An existing NAT route has to be deleted first, because a
+    # route table can only have one default route.
+    aws_route_delete "${rtb_private}" "0.0.0.0/0" 2>/dev/null || true
+    aws_route_to "${rtb_private}" "0.0.0.0/0" "${igw}" "internet-gateway" 2>/dev/null || true
     aws_associate_route_table "${services_subnet}" "${rtb_private}" 2>/dev/null || true
 
-    log_ok "Route tables configured (public -> IGW, services -> NAT gateway)"
+    log_ok "Route tables configured (public and services -> IGW)"
+}
+
+# IPv6 setup.
+#
+# The lab has to be reachable from wherever the operator is - a hotel Wi-Fi,
+# a phone hotspot, a university network. Those are usually CGNAT networks
+# where the IPv4 address is a shared translation and EC2 instance public
+# IPv4 addresses are unreachable. A native IPv6 address is not translated,
+# so the nodes are addressed over IPv6.
+#
+# Two /56 blocks are needed: AWS reserves the whole Amazon-provided /56 for
+# the first subnet that asks for an IPv6 range, so a second subnet needs a
+# second /56.
+lab_create_ipv6() {
+    local vpc_cidr public_subnet services_subnet sub_cidr
+
+    # --- VPC level ---
+    if [ -z "$(aws_vpc_ipv6_cidr)" ]; then
+        log_info "Associating an IPv6 /56 with the VPC..."
+        aws_vpc_ipv6_associate || die "Could not associate an IPv6 CIDR with the VPC"
+        if ! aws_vpc_ipv6_wait; then
+            die "The VPC IPv6 association did not complete in time."
+        fi
+    fi
+    vpc_cidr="$(aws_vpc_ipv6_cidr)"
+    [ -n "${vpc_cidr}" ] || die "The VPC has no IPv6 CIDR"
+    log_ok "VPC IPv6: ${vpc_cidr}"
+    state_set ".ipv6.vpc_cidr" "\"${vpc_cidr}\""
+
+    # --- subnet level ---
+    # Each subnet gets a /64 carved out of a /56 of the VPC. The first
+    # subnet takes the base /64 of the first /56; a second subnet needs a
+    # second /56, because AWS reserves the entire first one for the first
+    # subnet.
+    local role subnet
+    for role in public services; do
+        subnet="$(state_get ".subnets.${role}.id")"
+        [ -n "${subnet}" ] || continue
+
+        if [ -z "$(aws_subnet_ipv6_cidr "${subnet}")" ]; then
+            # Try the base /64 of every /56 associated with the VPC until
+            # one is accepted. AWS rejects a /64 that is already taken.
+            local assoc cidr ok=0
+            for assoc in $(aws_cli ec2 describe-vpcs --region "${AWS_REGION}" \
+                    --filters "Name=cidr,Values=${VPC_CIDR}" \
+                    --query "Vpcs[0].Ipv6CidrBlockAssociationSet[?Ipv6CidrBlockState.State==\`associated\`].Ipv6CidrBlock" \
+                    --output text 2>/dev/null); do
+                cidr="${assoc%/*}::/64"
+                if aws_subnet_ipv6_associate "${subnet}" "${cidr}" 2>/dev/null; then
+                    log_ok "Subnet ${role}: IPv6 ${cidr} associated"
+                    ok=1
+                    break
+                fi
+            done
+            if [ "${ok}" -eq 0 ]; then
+                # All the /56s of the VPC are used up by other subnets.
+                # Associate one more /56 and retry.
+                log_info "Associating an additional IPv6 /56 for subnet ${role}..."
+                aws_vpc_ipv6_associate || true
+                aws_vpc_ipv6_wait || true
+                for assoc in $(aws_cli ec2 describe-vpcs --region "${AWS_REGION}" \
+                        --filters "Name=cidr,Values=${VPC_CIDR}" \
+                        --query "Vpcs[0].Ipv6CidrBlockAssociationSet[?Ipv6CidrBlockState.State==\`associated\`].Ipv6CidrBlock" \
+                        --output text 2>/dev/null); do
+                    cidr="${assoc%/*}::/64"
+                    if aws_subnet_ipv6_associate "${subnet}" "${cidr}" 2>/dev/null; then
+                        log_ok "Subnet ${role}: IPv6 ${cidr} associated"
+                        ok=1
+                        break
+                    fi
+                done
+            fi
+            [ "${ok}" -eq 1 ] || die "Could not associate an IPv6 range with subnet ${role}"
+        else
+            log_info "Subnet ${role} already has an IPv6 range"
+        fi
+
+        sub_cidr="$(aws_subnet_ipv6_cidr "${subnet}")"
+        state_set ".subnets.${role}.ipv6_cidr" "\"${sub_cidr}\""
+
+        # New instances get an IPv6 address automatically.
+        aws_subnet_ipv6_enable_auto "${subnet}" || true
+    done
+
+    # --- routes ---
+    # The public subnet routes IPv6 straight to the internet gateway. The
+    # services subnet uses an egress-only internet gateway, because a NAT
+    # gateway cannot be the next hop for an IPv6 destination.
+    local rtb_public rtb_services eigw
+    rtb_public="$(state_get ".rtb.public")"
+    rtb_services="$(state_get ".rtb.private")"
+
+    if [ -n "${rtb_public}" ]; then
+        aws_route_ipv6 "${rtb_public}" "::/0" "internet-gateway" "$(state_get ".igw")" 2>/dev/null || true
+    fi
+
+    if [ -n "${rtb_services}" ]; then
+        eigw="$(aws_eigw_id)"
+        if [ -z "${eigw}" ]; then
+            eigw="$(aws_eigw_create)"
+            log_ok "Egress-only internet gateway ${eigw} created"
+        fi
+        aws_route_ipv6 "${rtb_services}" "::/0" "egress-only-internet-gateway" "${eigw}" 2>/dev/null || true
+        state_set ".eigw" "\"${eigw}\""
+    fi
+
+    log_ok "IPv6 configured (public subnet -> IGW, services subnet -> egress-only IGW)"
 }
 
 # The operator's source IP, used to scope the web UI and SSH rules.
@@ -254,9 +408,87 @@ lab_caller_cidr() {
     printf '%s' "${AWS_CALLER_IP}"
 }
 
+# Keep the operator's access up to date.
+#
+# The operator's public IPv4 address changes. A network with a NAT gives a
+# new address every time the connection is re-established, and a mobile
+# network changes it while the lab is running. The security group rule
+# that was written during the first provisioning run is therefore useless
+# a few minutes later, and the operator loses the access to the web UI and
+# to SSH - while the lab itself is perfectly fine.
+#
+# This function is called before every phase, so that the operator always
+# has access to the nodes, no matter how the address changed in the
+# meantime. It removes the stale single-host rules and adds the current
+# address.
+lab_sync_operator_access() {
+    local pve_sg services_sg caller caller6
+
+    pve_sg="$(state_get ".sgs.pve")"
+    services_sg="$(state_get ".sgs.services")"
+
+    # Nothing to do before the security groups exist.
+    [ -n "${pve_sg}" ] || return 0
+
+    # The address is detected again on every run: the cached value in the
+    # environment would keep the stale address alive.
+    AWS_CALLER_IP="$(detect_caller_ip)"
+    if [ -z "${AWS_CALLER_IP}" ]; then
+        log_warn "Could not detect the operator IP - the access rules are left as they are."
+        return 0
+    fi
+
+    caller="${AWS_CALLER_IP}/32"
+
+    # The IPv6 address is stable in practice, so the IPv6 rules are not
+    # touched. They are the fallback for a network without IPv4.
+    caller6="$(lab_caller_ipv6_cidr)"
+
+    local changed=0
+    local sg
+    for sg in "${pve_sg}" "${services_sg}"; do
+        [ -n "${sg}" ] || continue
+
+        # Remove the stale rules and add the current address.
+        aws_sg_revoke_operator "${sg}"
+
+        aws_sg_allow "${sg}" tcp 22 "${caller}" "SSH from the operator"
+        aws_sg_allow "${sg}" tcp 8006 "${caller}" "Proxmox web UI from the operator"
+        aws_sg_allow "${sg}" tcp 8007 "${caller}" "Proxmox web UI and API from the operator"
+        aws_sg_allow "${sg}" tcp "5900-5999" "${caller}" "VNC/SPICE console from the operator"
+
+        changed=1
+    done
+
+    if [ "${changed}" = "1" ]; then
+        log_ok "Operator access synced to ${caller}"
+    fi
+}
+
+# The operator's public IPv6 address, as a CIDR. Empty when the operator has
+# no usable IPv6 - in that case the lab is reached over IPv4.
+lab_caller_ipv6_cidr() {
+    if [ -z "${AWS_CALLER_IPV6:-}" ]; then
+        AWS_CALLER_IPV6="$(detect_caller_ipv6)"
+        export AWS_CALLER_IPV6
+    fi
+    [ -n "${AWS_CALLER_IPV6}" ] || return 0
+
+    case "${AWS_CALLER_IPV6}" in
+        */*) printf '%s' "${AWS_CALLER_IPV6}" ;;
+        *)   printf '%s/128' "${AWS_CALLER_IPV6}" ;;
+    esac
+}
+
 lab_create_security_groups() {
-    local pve_sg services_sg caller
+    local pve_sg services_sg caller caller6
     caller="$(lab_caller_cidr)"
+    caller6="$(lab_caller_ipv6_cidr)"
+    if [ -n "${caller6}" ]; then
+        log_ok "Operator IPv6: ${caller6}"
+    else
+        log_warn "No operator IPv6 detected - the lab will only be reachable over IPv4."
+    fi
 
     pve_sg="$(aws_sg_id "pve-lab")"
     if [ -z "${pve_sg}" ]; then
@@ -273,6 +505,15 @@ lab_create_security_groups() {
     aws_sg_allow "${pve_sg}" tcp 22 "${caller}" "SSH from the operator"
     aws_sg_allow "${pve_sg}" tcp 8006 "${caller}" "Proxmox web UI from the operator"
     aws_sg_allow "${pve_sg}" tcp "5900-5999" "${caller}" "VNC/SPICE console from the operator"
+
+    # The same rules for IPv6. The operator's IPv4 is frequently a CGNAT
+    # translation, so the IPv6 rules are what actually make the lab
+    # reachable from a hotel or a phone hotspot.
+    if [ -n "${caller6}" ]; then
+        aws_sg_allow "${pve_sg}" tcp 22 "${caller6}" "SSH from the operator (IPv6)"
+        aws_sg_allow "${pve_sg}" tcp 8006 "${caller6}" "Proxmox web UI from the operator (IPv6)"
+        aws_sg_allow "${pve_sg}" tcp "5900-5999" "${caller6}" "VNC/SPICE console from the operator (IPv6)"
+    fi
 
     # Node to node: corosync/KNET (5405-5412), pvecm (7946), SSH, web UI.
     aws_sg_allow "${pve_sg}" udp "5405-5412" "${VPC_CIDR}" "corosync/KNET between nodes"
@@ -296,9 +537,18 @@ lab_create_security_groups() {
     aws_tag_lab "${services_sg}" "services-lab" "sg"
 
     aws_sg_allow "${services_sg}" tcp 22 "${caller}" "SSH from the operator"
+    # The cluster nodes and the operator's helper instances reach the
+    # services over the private addresses.
+    aws_sg_allow "${services_sg}" tcp 22 "${VPC_CIDR}" "SSH inside the VPC"
     aws_sg_allow "${services_sg}" tcp 2049 "${VPC_CIDR}" "NFS from the cluster nodes"
     aws_sg_allow "${services_sg}" tcp 8007 "${VPC_CIDR}" "PBS web UI and API from the cluster"
     aws_sg_allow "${services_sg}" icmp -1 "${VPC_CIDR}" "ICMP inside the VPC"
+
+    if [ -n "${caller6}" ]; then
+        aws_sg_allow "${services_sg}" tcp 22 "${caller6}" "SSH from the operator (IPv6)"
+        aws_sg_allow "${services_sg}" tcp 8007 "${caller6}" "PBS web UI from the operator (IPv6)"
+    fi
+
     state_set ".sgs.services" "\"${services_sg}\""
 }
 
@@ -315,68 +565,67 @@ lab_phase_amis() {
     if [ -n "${pve_ami}" ] && aws_quiet ec2 describe-images --region "${AWS_REGION}" --image-ids "${pve_ami}"; then
         log_info "Proxmox AMI ${pve_ami} already built"
     else
-        local base_ami
-        base_ami="$(aws_debian_ami)"
-        [ -n "${base_ami}" ] || die "Could not find a Debian 13 cloud image in ${AWS_REGION}"
-        log_info "Base Debian AMI: ${base_ami}"
-
-        pve_ami="$(lab_build_ami "pve" "${LAB_ROOT_DIR}/packer/pve.pkr.hcl" "${base_ami}")"
+        pve_ami="$(lab_build_ami "pve")"
         state_set ".amis.pve" "\"${pve_ami}\""
     fi
 
     if [ -n "${pbs_ami}" ] && aws_quiet ec2 describe-images --region "${AWS_REGION}" --image-ids "${pbs_ami}"; then
         log_info "PBS AMI ${pbs_ami} already built"
     else
-        local base_ami
-        base_ami="$(aws_debian_ami)"
-        pbs_ami="$(lab_build_ami "pbs" "${LAB_ROOT_DIR}/packer/pbs.pkr.hcl" "${base_ami}")"
+        pbs_ami="$(lab_build_ami "pbs")"
         state_set ".amis.pbs" "\"${pbs_ami}\""
+    fi
+
+    # The NFS storage server gets its own AMI, so that it comes up with the
+    # same boot-time network configuration as the Proxmox nodes.
+    local nfs_ami
+    nfs_ami="$(state_get ".amis.nfs")"
+    if [ -n "${nfs_ami}" ] && aws_quiet ec2 describe-images --region "${AWS_REGION}" --image-ids "${nfs_ami}"; then
+        log_info "NFS AMI ${nfs_ami} already built"
+    else
+        nfs_ami="$(lab_build_ami "nfs")"
+        state_set ".amis.nfs" "\"${nfs_ami}\""
     fi
 
     state_set_phase "amis"
 }
 
-# lab_build_ami <pve|pbs> <hcl-file> <base-ami>
+# lab_build_ami <pve|pbs>
+#
+# The image is built by packer/build-ami.sh rather than by Packer itself.
+#
+# Packer aborts a provisioner when the SSH connection to the build instance
+# drops, and the link to AWS from a hotel or a campus network drops
+# regularly. The build script therefore runs the whole build detached on the
+# instance and the result is polled from outside, so that a dropped
+# connection cannot affect the build.
 lab_build_ami() {
-    local kind="$1" hcl="$2" base_ami="$3"
-    local ami_name var_name volume_size
+    local kind="$1"
 
-    if [ "${kind}" = "pve" ]; then
-        ami_name="${PVE_AMI_NAME}"
-        var_name="pve_ami_name"
-        volume_size="${PVE_ROOT_VOLUME_SIZE}"
-    else
-        ami_name="${PBS_AMI_NAME}"
-        var_name="pbs_ami_name"
-        volume_size="16"
+    log_info "Building the ${kind} AMI (this takes 20-40 minutes)..."
+    # The build script prints its progress to stdout, which would otherwise
+    # be captured by the command substitution this function runs in.
+    if ! "${LAB_ROOT_DIR}/packer/build-ami.sh" "${kind}" >&2; then
+        die "The ${kind} AMI build failed."
     fi
 
-    # The build instance runs in the lab VPC, so that it is covered by the
-    # same tags and gets a public address from the public subnet.
-    local subnet_id
-    subnet_id="$(state_get ".subnets.public.id")"
-
-    log_info "Building the ${kind} AMI with Packer (this takes several minutes)..."
-    if ! packer init "${hcl}" >/dev/null 2>&1; then
-        log_warn "packer init failed - continuing, the plugin may already be installed"
-    fi
-    # Packer's build log goes to stdout, which would otherwise be captured
-    # by the command substitution this function runs in.
-    if ! packer build \
-        -var "region=${PACKER_AMI_REGION}" \
-        -var "base_ami=${base_ami}" \
-        -var "${var_name}=${ami_name}" \
-        -var "root_volume_size=${volume_size}" \
-        -var "ssh_key_path=${PVE_SSH_KEY_PATH}" \
-        -var "ssh_keypair_name=${PVE_KEYPAIR_NAME}" \
-        -var "subnet_id=${subnet_id}" \
-        "${hcl}" >&2; then
-        die "Packer build for the ${kind} AMI failed."
-    fi
-
+    # The build script writes the ID of the image that it created. The name
+    # is not used for the lookup, because the build appends a timestamp to
+    # it when the configured name is already taken.
     local ami
-    ami="$(aws_ami_id_by_name "${ami_name}")"
-    [ -n "${ami}" ] || die "Packer finished but the AMI ${ami_name} could not be found."
+    ami="$(cat /tmp/lab-ami-id.txt 2>/dev/null || true)"
+    if [ -z "${ami}" ] || [ "${ami}" = "None" ]; then
+        # Fall back to the configured name.
+        local ami_name
+        if [ "${kind}" = "pve" ]; then
+            ami_name="${PVE_AMI_NAME}"
+        else
+            ami_name="${PBS_AMI_NAME}"
+        fi
+        ami="$(aws_ami_id_by_name "${ami_name}")"
+    fi
+
+    [ -n "${ami}" ] || die "The build finished but the AMI could not be found."
     log_ok "${kind} AMI built: ${ami}"
     printf '%s' "${ami}"
 }
@@ -416,17 +665,27 @@ lab_phase_nodes() {
             --arg id "${instance_id}" --arg role pve --arg eni0 "${eni0}" \
             --arg priv "${priv}" --arg pub "${pub}" --arg type "${PVE_INSTANCE_TYPE}" \
             --arg mac0 "$(aws_eni_mac "${eni0}")" \
+            --arg reach "$(aws_instance_reach_ip "${instance_id}")" \
+            --arg ipv6 "$(aws_instance_ipv6 "${instance_id}")" \
+            --arg ipv6gw "$(aws_ipv6_gateway "${AWS_REGION}")" \
             --arg vol "$(aws_instance_volume_for_device "${instance_id}" /dev/sdf)" \
             '{id:$id, role:$role, eni0:$eni0, private_ip:$priv,
-              public_ip:$pub, instance_type:$type, mac0:$mac0,
+              public_ip:$pub, reach_ip:$reach, ipv6:$ipv6, ipv6_gateway:$ipv6gw,
+              instance_type:$type, mac0:$mac0,
               data_volume:$vol}')"
     done
 
     # --- NFS server ---
     if [ -z "$(state_get ".instances.nfs1.id")" ]; then
         log_info "Launching the NFS server..."
+        # The NFS server uses the AMI that was built for it, so that it
+        # comes up with the same boot-time network configuration as the
+        # Proxmox nodes.
+        local nfs_ami
+        nfs_ami="$(state_get ".amis.nfs")"
+        [ -n "${nfs_ami}" ] || nfs_ami="$(aws_debian_ami)"
         instance_id="$(aws_instance_launch_service "nfs1" "nfs" "${NFS_INSTANCE_TYPE}" \
-            "$(aws_debian_ami)" "${az}" "${NFS_VOLUME_SIZE}")"
+            "${nfs_ami}" "${az}" "${NFS_VOLUME_SIZE}")"
         [ -n "${instance_id}" ] || die "Failed to launch the NFS server"
         aws_wait_instance_running "${instance_id}"
         log_ok "NFS server launched: ${instance_id}"
@@ -434,8 +693,12 @@ lab_phase_nodes() {
             --arg id "${instance_id}" --arg role nfs \
             --arg priv "$(aws_eni_private_ip "$(aws_instance_eni "${instance_id}" 0)")" \
             --arg pub "$(aws_instance_public_ip "${instance_id}")" \
+            --arg reach "$(aws_instance_reach_ip "${instance_id}")" \
+            --arg ipv6 "$(aws_instance_ipv6 "${instance_id}")" \
+            --arg ipv6gw "$(aws_ipv6_gateway "${AWS_REGION}")" \
             --arg vol "$(aws_instance_volume_for_device "${instance_id}" /dev/sdf)" \
-            '{id:$id, role:$role, private_ip:$priv, public_ip:$pub, data_volume:$vol}')"
+            '{id:$id, role:$role, private_ip:$priv, public_ip:$pub, reach_ip:$reach,
+              ipv6:$ipv6, ipv6_gateway:$ipv6gw, data_volume:$vol}')"
     fi
 
     # --- Proxmox Backup Server ---
@@ -450,8 +713,12 @@ lab_phase_nodes() {
             --arg id "${instance_id}" --arg role pbs \
             --arg priv "$(aws_eni_private_ip "$(aws_instance_eni "${instance_id}" 0)")" \
             --arg pub "$(aws_instance_public_ip "${instance_id}")" \
+            --arg reach "$(aws_instance_reach_ip "${instance_id}")" \
+            --arg ipv6 "$(aws_instance_ipv6 "${instance_id}")" \
+            --arg ipv6gw "$(aws_ipv6_gateway "${AWS_REGION}")" \
             --arg vol "$(aws_instance_volume_for_device "${instance_id}" /dev/sdf)" \
-            '{id:$id, role:$role, private_ip:$priv, public_ip:$pub, data_volume:$vol}')"
+            '{id:$id, role:$role, private_ip:$priv, public_ip:$pub, reach_ip:$reach,
+              ipv6:$ipv6, ipv6_gateway:$ipv6gw, data_volume:$vol}')"
     fi
 
     state_set_phase "nodes"
@@ -463,39 +730,54 @@ lab_phase_nodes() {
 lab_phase_bootstrap() {
     log_step "Phase 4/8 - Bootstrapping the Proxmox nodes"
 
-    local node instance_id priv
+    local node instance_id
     for node in $(lab_node_list); do
         instance_id="$(state_get ".instances.${node}.id")"
-        priv="$(state_get ".instances.${node}.private_ip")"
 
         if [ "$(state_get ".instances.${node}.bootstrapped")" = "true" ]; then
             log_info "Node ${node} is already bootstrapped"
             continue
         fi
 
-        log_info "Waiting for SSH on ${node} (${priv})..."
-        if ! wait_ssh "${priv}" 600; then
-            log_warn "SSH to ${node} did not come up in time - trying the SSM fallback"
-            if ! ssm_agent_installed "${instance_id}"; then
-                die "Cannot reach ${node}: neither SSH nor SSM is available."
-            fi
+        # The transport is chosen once and then stays stable: either SSH,
+        # when the operator's network reaches the instance, or the Systems
+        # Manager, which works from every network that can reach the AWS
+        # API. The latter is the fallback for networks that block the
+        # inbound traffic to the instances.
+        log_info "Waiting for ${node} to become reachable..."
+        if ! lab_wait_ready "${node}" 900; then
+            die "Cannot reach ${node}: neither SSH nor SSM is available."
         fi
+        log_info "${node} is reachable over $(transport_for "${node}")"
 
         # The data volume is located by its EBS serial, not by device index.
         local data_device
-        data_device="$(resolve_volume_device "${priv}" "$(state_get ".instances.${node}.data_volume")" || true)"
+        data_device="$(lab_exec "${node}" \
+            "sudo lsblk -ndo NAME,SERIAL | grep -F '$(state_get ".instances.${node}.data_volume" | tr -d '-')' | awk '{print \$1}'" 2>/dev/null | head -1)"
         if [ -z "${data_device}" ]; then
-            data_device="$(ssh_exec "${priv}" "sudo lsblk -ndo NAME | grep -v '^nvme0n1$' | head -1" || true)"
+            data_device="$(lab_exec "${node}" \
+                "sudo lsblk -ndo NAME | grep -v '^nvme0n1$' | head -1" 2>/dev/null | head -1)"
         fi
         [ -n "${data_device}" ] || die "Could not determine the data volume device on ${node}."
         log_info "Data volume on ${node}: ${data_device}"
 
+        # The node keeps its private IPv4 address on the management interface
+        # and gets the public IPv6 address as well. The operator reaches the
+        # node over IPv6, the cluster talks over the private IPv4.
+        local mgmt_ip ipv6 ipv6_gw
+        mgmt_ip="$(state_get ".instances.${node}.private_ip")"
+        ipv6="$(state_get ".instances.${node}.ipv6")"
+        ipv6_gw="$(state_get ".instances.${node}.ipv6_gateway")"
+
         log_info "Running the bootstrap on ${node}..."
-        ssh_run_local "${priv}" "${LAB_ROOT_DIR}/scripts/node-bootstrap.sh" \
+        lab_run_script "${node}" "${LAB_ROOT_DIR}/scripts/node-bootstrap.sh" \
             --name "${node}" \
-            --mgmt-ip "${priv}" \
+            --mgmt-ip "${mgmt_ip}" \
             --mgmt-gw "${VPC_GATEWAY}" \
             --mgmt-cidr 24 \
+            --mgmt-ipv6 "${ipv6}" \
+            --mgmt-ipv6-cidr 64 \
+            --mgmt-ipv6-gw "${ipv6_gw}" \
             --guest-cidr "$(lab_node_overlay_cidr "${node}")" \
             --guest-gw "$(lab_node_overlay_gw "${node}")" \
             --dhcp-start "$(lab_node_dhcp_start "${node}")" \
@@ -506,15 +788,15 @@ lab_phase_bootstrap() {
             || die "Bootstrap failed on ${node}"
 
         log_info "Rebooting ${node} to apply the network configuration..."
-        ssh_exec_q "${priv}" "sudo nohup sh -c 'sleep 1; systemctl reboot' >/dev/null 2>&1 &" || true
-        sleep 10
-        if ! wait_ssh "${priv}" "${BOOT_TIMEOUT}"; then
+        lab_exec_q "${node}" "sudo nohup sh -c 'sleep 1; systemctl reboot' >/dev/null 2>&1 &" || true
+        sleep 15
+        if ! lab_wait_ready "${node}" "${BOOT_TIMEOUT}"; then
             die "${node} did not come back after the reboot. Use ./debug.sh for diagnostics."
         fi
         log_ok "${node} is back with the new network configuration"
 
         # Sanity check the bridge.
-        if ! ssh_exec_q "${priv}" "sudo ip -4 addr show vmbr0 | grep -q 'inet'"; then
+        if ! lab_exec_q "${node}" "sudo ip -4 addr show vmbr0 | grep -q 'inet'"; then
             die "${node} rebooted but vmbr0 has no address. Use ./debug.sh."
         fi
 
@@ -545,31 +827,47 @@ lab_phase_cluster() {
     local node pubkey
     local keys=""
     for node in $(lab_node_list); do
-        local priv
-        priv="$(state_get ".instances.${node}.private_ip")"
-        ssh_exec "${priv}" "sudo mkdir -p /root/.ssh && sudo chmod 700 /root/.ssh && \
+        lab_exec_q "${node}" "sudo mkdir -p /root/.ssh && sudo chmod 700 /root/.ssh && \
             sudo test -f /root/.ssh/id_ed25519 || sudo ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519 -C 'pve-cluster-${node}' >/dev/null" || true
-        pubkey="$(ssh_exec "${priv}" "sudo cat /root/.ssh/id_ed25519.pub")"
+        pubkey="$(lab_exec "${node}" "sudo cat /root/.ssh/id_ed25519.pub")"
         keys="${keys}${pubkey}"$'\n'
     done
 
+    # Every node gets the public key of every other node, so that the
+    # cluster can join over SSH without an interactive password.
     for node in $(lab_node_list); do
-        local priv
-        priv="$(state_get ".instances.${node}.private_ip")"
         local other
         while IFS= read -r other; do
             [ -n "${other}" ] || continue
-            ssh_install_pubkey "${priv}" "${other}" || true
+            lab_exec_q "${node}" "sudo install -d -m 700 /root/.ssh && \
+                sudo grep -qF '${other}' /root/.ssh/authorized_keys 2>/dev/null || \
+                printf '%s\\n' '${other}' | sudo tee -a /root/.ssh/authorized_keys >/dev/null; \
+                sudo chmod 600 /root/.ssh/authorized_keys" || true
         done <<< "${keys}"
     done
 
     # Create the cluster on the first node.
-    local first_priv fingerprint
-    first_priv="$(state_get ".instances.${first_node}.private_ip")"
+    #
+    # The ring address of a node is its private IPv4 address.
+    #
+    # The cluster members talk to each other over the private network of
+    # the VPC, so that is what the ring has to use. It also has to be
+    # consistent: corosync refuses to start when the nodes of one link
+    # use different address families, and it says so with
+    #
+    #   Nodes for link 0 have different IP families
+    #
+    # The address the operator uses to reach the node (the IPv6 address)
+    # is not usable for the ring: it is not reachable from inside the
+    # VPC at all.
+    local first_priv first_ring fingerprint
+    first_priv="$(state_reach_ip "${first_node}")"
+    first_ring="$(state_get ".instances.${first_node}.private_ip")"
+    [ -n "${first_ring}" ] || first_ring="${first_priv}"
 
     if ! pve_cmd_q "${first_priv}" "pvecm status | grep -q 'Quorate'"; then
-        pve_cluster_create "${first_priv}" "${PVE_CLUSTER_NAME}" "${first_priv}" 1
-        log_ok "Cluster '${PVE_CLUSTER_NAME}' created on ${first_node}"
+        pve_cluster_create "${first_priv}" "${PVE_CLUSTER_NAME}" "${first_ring}" 1
+        log_ok "Cluster '${PVE_CLUSTER_NAME}' created on ${first_node} (ring ${first_ring})"
     fi
 
     fingerprint="$(pve_cluster_fingerprint "${first_priv}")"
@@ -578,12 +876,15 @@ lab_phase_cluster() {
     # Join the remaining nodes.
     local index=2
     for node in $(lab_node_list | tail -n +2); do
-        local priv
-        priv="$(state_get ".instances.${node}.private_ip")"
+        local priv ring
+        priv="$(state_reach_ip "${node}")"
+        ring="$(state_get ".instances.${node}.private_ip")"
+        [ -n "${ring}" ] || ring="${priv}"
+
         if pve_cmd_q "${priv}" "pvecm status | grep -q 'Quorate'"; then
             log_info "${node} is already a cluster member"
         else
-            pve_cluster_join "${priv}" "${first_priv}" "${priv}" "${index}" "${fingerprint}" \
+            pve_cluster_join "${priv}" "${first_priv}" "${ring}" "${index}" "${fingerprint}" "${first_ring}" \
                 || die "Failed to join ${node} to the cluster."
             log_ok "${node} joined the cluster"
         fi
@@ -591,12 +892,38 @@ lab_phase_cluster() {
     done
 
     # Verify quorum.
-    local quorate
-    quorate="$(pve_cmd "${first_priv}" "pvecm status | grep -c 'Quorate: Yes'")"
+    #
+    # The number of nodes is checked as well. A cluster that reports
+    # "Quorate: Yes" with a single node is not the cluster that was
+    # asked for.
+    local quorate node_count
+    # The '|| true' is needed: 'grep -c' returns a non-zero exit code
+    # when it finds nothing, and that would abort the whole phase.
+    # The output of pvecm pads the values with spaces, so the pattern
+    # matches "Quorate:" and "Yes" with any number of spaces between
+    # them. A pattern with a single space never matches.
+    quorate="$(pve_cmd_out "${first_priv}" "pvecm status | grep -cE 'Quorate:[[:space:]]+Yes' || true" 2>/dev/null | tr -dc '0-9' | head -1)"
+    node_count="$(pve_cmd_out "${first_priv}" "pvecm status | grep -cE 'Expected votes:[[:space:]]*[0-9]+' || true" 2>/dev/null | tr -dc '0-9' | head -1)"
+    [ -n "${quorate}" ] || quorate=0
+    [ -n "${node_count}" ] || node_count=0
+
     if [ "${quorate}" -lt 1 ]; then
         die "The cluster is not quorate. Use ./debug.sh to investigate."
     fi
     log_ok "Cluster is quorate"
+
+    # The membership is checked explicitly: 'pvecm add' reports a success
+    # even when the join failed, because the corosync service is started
+    # asynchronously. The membership is the only reliable proof.
+    local expected
+    expected="$(lab_node_list | wc -w | tr -d ' ')"
+    local members
+    members="$(pve_cmd_out "${first_priv}" "pvecm nodes" 2>/dev/null | grep -cE '^[[:space:]]*[0-9]+[[:space:]]+[0-9]+[[:space:]]+pve' || true)"
+
+    if [ "${members}" -lt "${expected}" ]; then
+        die "The cluster has ${members} members but ${expected} were expected. Use ./debug.sh to investigate."
+    fi
+    log_ok "Cluster '${PVE_CLUSTER_NAME}' has ${members} members and is quorate"
 
     state_set ".pve.cluster" "\"${PVE_CLUSTER_NAME}\""
     state_set ".pve.cluster_formed" "true"
@@ -611,7 +938,7 @@ lab_phase_storage() {
 
     local first_node priv
     first_node="$(lab_node_list | head -1)"
-    priv="$(state_get ".instances.${first_node}.private_ip")"
+    priv="$(state_reach_ip "${first_node}")"
 
     # --- shared NFS ---
     local nfs_ip
@@ -649,7 +976,12 @@ lab_setup_nfs_server() {
     local host="$1"
     local volume_id device
     volume_id="$(state_get ".instances.nfs1.data_volume")"
-    device="$(resolve_volume_device "${host}" "${volume_id}" || true)"
+    device="$(lab_exec "nfs1" \
+        "sudo lsblk -ndo NAME,SERIAL | grep -F '$(printf '%s' "${volume_id}" | tr -d '-')' | awk '{print \$1}'" 2>/dev/null | head -1)"
+    if [ -z "${device}" ]; then
+        device="$(lab_exec "nfs1" \
+            "sudo lsblk -ndo NAME | grep -v '^nvme0n1$' | head -1" 2>/dev/null | head -1)"
+    fi
 
     if [ -z "${device}" ]; then
         log_warn "Could not resolve the NFS data volume - assuming /dev/nvme1n1"
@@ -657,7 +989,7 @@ lab_setup_nfs_server() {
     fi
 
     log_info "Configuring the NFS export ${NFS_EXPORT} on ${host}"
-    ssh_run_local "${host}" "${LAB_ROOT_DIR}/scripts/nfs-setup.sh" "${device}" "${NFS_EXPORT}" \
+    lab_run_script "nfs1" "${LAB_ROOT_DIR}/scripts/nfs-setup.sh" "${device}" "${NFS_EXPORT}" \
         || die "The NFS server setup failed on ${host}"
     log_ok "NFS export ${NFS_EXPORT} is live on ${host}"
 }
@@ -669,7 +1001,7 @@ lab_phase_backup() {
     log_step "Phase 7/8 - Configuring the Proxmox Backup Server"
 
     local pbs_ip pbs_pub volume_id device fingerprint
-    pbs_ip="$(state_get ".instances.pbs1.private_ip")"
+    pbs_ip="$(state_reach_ip "pbs1")"
     pbs_pub="$(state_get ".instances.pbs1.public_ip")"
     [ -n "${pbs_ip}" ] || die "The PBS instance is not part of the state file."
 
@@ -677,25 +1009,30 @@ lab_phase_backup() {
     [ -n "${password}" ] || password="$(gen_password 24)"
     export PBS_PASSWORD="${password}"
 
-    log_info "Waiting for SSH on the PBS..."
-    wait_ssh "${pbs_ip}" 600 || die "Cannot reach the Proxmox Backup Server."
+    log_info "Waiting for the PBS to become reachable..."
+    lab_wait_ready "pbs1" 900 || die "Cannot reach the Proxmox Backup Server."
 
     volume_id="$(state_get ".instances.pbs1.data_volume")"
-    device="$(resolve_volume_device "${pbs_ip}" "${volume_id}" || true)"
+    device="$(lab_exec "pbs1" \
+        "sudo lsblk -ndo NAME,SERIAL | grep -F '$(printf '%s' "${volume_id}" | tr -d '-')' | awk '{print \$1}'" 2>/dev/null | head -1)"
+    if [ -z "${device}" ]; then
+        device="$(lab_exec "pbs1" \
+            "sudo lsblk -ndo NAME | grep -v '^nvme0n1$' | head -1" 2>/dev/null | head -1)"
+    fi
     [ -n "${device}" ] || device="/dev/nvme1n1"
 
     log_info "Preparing the PBS datastore volume (${device})"
-    ssh_run_local "${pbs_ip}" "${LAB_ROOT_DIR}/scripts/pbs-setup.sh" \
+    lab_run_script "pbs1" "${LAB_ROOT_DIR}/scripts/pbs-setup.sh" \
         "${device}" "${PBS_DATASTORE}" "${PBS_USERNAME}" "${password}" \
         || die "The Proxmox Backup Server setup failed."
 
-    fingerprint="$(ssh_exec "${pbs_ip}" "sudo proxmox-backup-manager fingerprint 2>/dev/null | grep -oE '[A-Fa-f0-9]{2}(:[A-Fa-f0-9]{2}){31}' | head -1")"
+    fingerprint="$(lab_exec "pbs1" "sudo proxmox-backup-manager fingerprint 2>/dev/null | grep -oE '[A-Fa-f0-9]{2}(:[A-Fa-f0-9]{2}){31}' | head -1")"
     [ -n "${fingerprint}" ] || die "Could not read the Proxmox Backup Server fingerprint."
     log_ok "PBS fingerprint: ${fingerprint}"
 
     # Register the PBS datastore on the cluster.
     local first_priv
-    first_priv="$(state_get ".instances.$(lab_node_list | head -1).private_ip")"
+    first_priv="$(state_reach_ip "$(lab_node_list | head -1)")"
     pve_storage_add_pbs "${first_priv}" "${PBS_STORAGE_ID}" "${pbs_ip}" "${PBS_DATASTORE}" \
         "${PBS_USERNAME}" "${password}" "${fingerprint}"
 
@@ -714,10 +1051,16 @@ lab_phase_guests() {
 
     local first_node first_priv
     first_node="$(lab_node_list | head -1)"
-    first_priv="$(state_get ".instances.${first_node}.private_ip")"
+    first_priv="$(state_reach_ip "${first_node}")"
 
     local ssh_pubkey guest_password
-    ssh_pubkey="$(ssh_keygen -y -f "${PVE_SSH_KEY_PATH}" 2>/dev/null || cat "${PVE_SSH_KEY_PATH}.pub")"
+    # The public key of the lab key pair. It is derived from the private
+    # key, and the .pub file is the fallback.
+    ssh_pubkey="$(ssh-keygen -y -f "${PVE_SSH_KEY_PATH}" 2>/dev/null || true)"
+    if [ -z "${ssh_pubkey}" ]; then
+        ssh_pubkey="$(cat "${PVE_SSH_KEY_PATH}.pub" 2>/dev/null || true)"
+    fi
+    [ -n "${ssh_pubkey}" ] || die "Could not read the public key of ${PVE_SSH_KEY_PATH}."
     guest_password="$(state_get ".pve.guest_password")"
     if [ -z "${guest_password}" ]; then
         guest_password="$(gen_password 20)"
@@ -741,7 +1084,7 @@ lab_provision_vms() {
     fi
 
     local image="/var/lib/vz/${GUEST_OS_NAME}-genericcloud.qcow2"
-    if ! ssh_exec_q "${host}" "sudo test -f '${image}'"; then
+    if ! pve_cmd_q "${host}" "test -f '${image}'"; then
         pve_download "${host}" "${GUEST_OS_URL}" "${image}"
     else
         log_info "The guest image is already present on ${node}"
@@ -765,13 +1108,14 @@ lab_provision_vms() {
     node3="$(lab_node_list | sed -n 3p)"
 
     local host2="${node2}" host3="${node3}"
-    local priv2 priv3
-    priv2="$(state_get ".instances.${node2}.private_ip")"
-    priv3="$(state_get ".instances.${node3}.private_ip")"
+    local priv priv2 priv3
+    priv="$(state_reach_ip "${node}")"
+    priv2="$(state_reach_ip "${node2}")"
+    priv3="$(state_reach_ip "${node3}")"
 
-    lab_clone_vm "${host}" "${priv}" "${template_id}" "${VM_WEB_ID}" "${VM_WEB_NAME}" "${storage}" full "${ssh_pubkey}" "${guest_password}"
-    lab_clone_vm "${host2}" "${priv2}" "${template_id}" "${VM_CLONE_FULL_ID}" "${VM_CLONE_FULL_NAME}" "${storage}" full "${ssh_pubkey}" "${guest_password}"
-    lab_clone_vm "${host3}" "${priv3}" "${template_id}" "${VM_CLONE_LINKED_ID}" "${VM_CLONE_LINKED_NAME}" "${storage}" linked "${ssh_pubkey}" "${guest_password}"
+    lab_clone_vm "${host}" "${priv}" "${template_id}" "${VM_WEB_ID}" "${VM_WEB_NAME}" "${storage}" full "${ssh_pubkey}" "${guest_password}" "${node}"
+    lab_clone_vm "${host2}" "${priv2}" "${template_id}" "${VM_CLONE_FULL_ID}" "${VM_CLONE_FULL_NAME}" "${storage}" full "${ssh_pubkey}" "${guest_password}" "${node}"
+    lab_clone_vm "${host3}" "${priv3}" "${template_id}" "${VM_CLONE_LINKED_ID}" "${VM_CLONE_LINKED_NAME}" "${storage}" linked "${ssh_pubkey}" "${guest_password}" "${node}"
 
     # --- start them ---
     lab_start_vm "${host}" "${priv}" "${VM_WEB_ID}"
@@ -794,13 +1138,21 @@ lab_start_vm() {
 
 lab_clone_vm() {
     local host="$1" priv="$2" src="$3" newid="$4" name="$5" storage="$6" mode="$7" ssh_pubkey="$8" guest_password="$9"
+    local template_node="${10}"
 
     if pve_cmd_q "${priv}" "qm status ${newid} >/dev/null 2>&1"; then
         log_info "VM ${newid} (${name}) already exists"
         return 0
     fi
 
-    pve_vm_clone "${priv}" "${src}" "${newid}" "${name}" "${storage}" "${mode}"
+    # The clone is started on the node that owns the template, and the
+    # target node is passed with --target.
+    local source_priv="${priv}"
+    if [ -n "${template_node}" ]; then
+        source_priv="$(state_reach_ip "${template_node}")"
+    fi
+
+    pve_vm_clone "${source_priv}" "${src}" "${newid}" "${name}" "${storage}" "${mode}" "${host}"
 
     # Give the clone its own identity.
     local ci_yaml
@@ -829,9 +1181,10 @@ lab_provision_cts() {
 
     # One container per node, so that the cluster exercises the shared storage
     # for the container rootfs as well.
-    local node2 priv2
+    local node2 priv priv2
     node2="$(lab_node_list | sed -n 2p)"
-    priv2="$(state_get ".instances.${node2}.private_ip")"
+    priv="$(state_reach_ip "${node}")"
+    priv2="$(state_reach_ip "${node2}")"
 
     lab_create_ct "${host}" "${priv}" "${CT_APP_ID}" "${CT_APP_NAME}" "${storage}" "${template_file}" "${guest_password}" "${ssh_pubkey}"
     lab_create_ct "${node2}" "${priv2}" "${CT_DB_ID}" "${CT_DB_NAME}" "${storage}" "${template_file}" "${guest_password}" "${ssh_pubkey}"
@@ -846,7 +1199,7 @@ lab_fetch_ct_template() {
     local listing file
 
     log_info "Looking up the latest Debian 13 container template"
-    listing="$(ssh_exec "${host}" "sudo curl -fsS --max-time 60 http://download.proxmox.com/images/system/ | grep -oE 'debian-13-standard_[0-9.]+-[0-9]+_amd64\\.tar\\.zst' | sort -uV | tail -1" 2>/dev/null || true)"
+    listing="$(pve_cmd_out "${host}" "curl -fsS --max-time 60 http://download.proxmox.com/images/system/ | grep -oE 'debian-13-standard_[0-9.]+-[0-9]+_amd64\\.tar\\.zst' | sort -uV | tail -1" 2>/dev/null || true)"
     file="${listing}"
 
     if [ -z "${file}" ]; then
@@ -902,7 +1255,7 @@ lab_phase_security() {
     log_step "Security baseline (seminar exercises)"
 
     local first_priv
-    first_priv="$(state_get ".instances.$(lab_node_list | head -1).private_ip")"
+    first_priv="$(state_reach_ip "$(lab_node_list | head -1)")"
 
     local user_password
     user_password="$(state_get ".pve.sec_user_password")"
@@ -938,26 +1291,25 @@ lab_phase_security() {
 lab_destroy_guests() {
     log_step "Destroying the guests"
 
-    local node priv
+    local node
     for node in $(lab_node_list); do
-        priv="$(state_get ".instances.${node}.private_ip")"
-        if ! ssh_exec_q "${priv}" "true"; then
+        if ! lab_exec_q "${node}" "true"; then
             log_warn "${node}: not reachable - its guests cannot be destroyed from here"
             continue
         fi
 
         local vmid
-        for vmid in $(ssh_exec "${priv}" "sudo qm list 2>/dev/null | tail -n +2 | awk '{print \$1}'"); do
+        for vmid in $(lab_exec "${node}" "sudo qm list 2>/dev/null | tail -n +2 | awk '{print \$1}'"); do
             [ -n "${vmid}" ] || continue
             log_info "${node}: destroying VM ${vmid}"
-            ssh_exec_q "${priv}" "sudo qm destroy ${vmid} --purge 1 --destroy-unreferenced-disks 1"
+            lab_exec_q "${node}" "sudo qm destroy ${vmid} --purge 1 --destroy-unreferenced-disks 1"
         done
 
         local ctid
-        for ctid in $(ssh_exec "${priv}" "sudo pct list 2>/dev/null | tail -n +2 | awk '{print \$1}'"); do
+        for ctid in $(lab_exec "${node}" "sudo pct list 2>/dev/null | tail -n +2 | awk '{print \$1}'"); do
             [ -n "${ctid}" ] || continue
             log_info "${node}: destroying container ${ctid}"
-            ssh_exec_q "${priv}" "sudo pct destroy ${ctid} --purge 1"
+            lab_exec_q "${node}" "sudo pct destroy ${ctid} --purge 1"
         done
     done
 }
@@ -966,27 +1318,26 @@ lab_destroy_guests() {
 lab_reset_cluster() {
     log_step "Resetting the cluster configuration"
 
-    local node priv last=""
+    local node last=""
     for node in $(lab_node_list); do
-        priv="$(state_get ".instances.${node}.private_ip")"
-        ssh_exec_q "${priv}" "true" || continue
+        lab_exec_q "${node}" "true" || continue
         log_info "${node}: leaving the cluster"
-        ssh_exec_q "${priv}" "sudo pvecm leave --force"
-        last="${priv}"
+        lab_exec_q "${node}" "sudo pvecm leave --force"
+        last="${node}"
     done
 
     # Wipe the stored cluster configuration on the last node so that the next
     # 'pvecm create' starts from a clean slate.
     if [ -n "${last}" ]; then
         log_info "Removing the stored cluster configuration"
-        ssh_exec_q "${last}" "sudo rm -f /etc/pve/corosync.conf /etc/pve/cluster/ /etc/pve/nodes/*/corosync.conf 2>/dev/null; true"
+        lab_exec_q "${last}" "sudo rm -f /etc/pve/corosync.conf /etc/pve/cluster/ /etc/pve/nodes/*/corosync.conf 2>/dev/null; true"
     fi
 
     # The storage definitions live in the cluster configuration too.
-    local first_priv
-    first_priv="$(state_get ".instances.$(lab_node_list | head -1).private_ip")"
-    if ssh_exec_q "${first_priv}" "true"; then
-        ssh_exec_q "${first_priv}" "sudo pvesm remove ${NFS_STORAGE_ID} 2>/dev/null; sudo pvesm remove ${PBS_STORAGE_ID} 2>/dev/null; sudo pvesm remove ${LOCAL_STORAGE_ID} 2>/dev/null; true"
+    local first_node
+    first_node="$(lab_node_list | head -1)"
+    if lab_exec_q "${first_node}" "true"; then
+        lab_exec_q "${first_node}" "sudo pvesm remove ${NFS_STORAGE_ID} 2>/dev/null; sudo pvesm remove ${PBS_STORAGE_ID} 2>/dev/null; sudo pvesm remove ${LOCAL_STORAGE_ID} 2>/dev/null; true"
     fi
 
     # Reset the recorded state so that a re-run starts from the foundation.
@@ -999,12 +1350,9 @@ lab_reset_cluster() {
 
 # Empty the shared NFS export.
 lab_clean_nfs_export() {
-    local nfs_ip
-    nfs_ip="$(state_get ".instances.nfs1.private_ip")"
-    [ -n "${nfs_ip}" ] || return 0
-    if ssh_exec_q "${nfs_ip}" "true"; then
+    if lab_exec_q "nfs1" "true"; then
         log_step "Cleaning the shared NFS export"
-        ssh_exec_q "${nfs_ip}" "rm -rf ${NFS_EXPORT}/images/* ${NFS_EXPORT}/rootfs/* ${NFS_EXPORT}/iso/* ${NFS_EXPORT}/vztmpl/* ${NFS_EXPORT}/backup/* 2>/dev/null; true"
+        lab_exec_q "nfs1" "rm -rf ${NFS_EXPORT}/images/* ${NFS_EXPORT}/rootfs/* ${NFS_EXPORT}/iso/* ${NFS_EXPORT}/vztmpl/* ${NFS_EXPORT}/backup/* 2>/dev/null; true"
     fi
 }
 
@@ -1020,15 +1368,13 @@ lab_print_summary() {
     printf '%sWeb UI%s\n' "${C_BOLD}" "${C_RESET}"
     local node
     for node in $(lab_node_list); do
-        local pub
-        pub="$(state_get ".instances.${node}.public_ip")"
-        printf '  %-8s https://%s:8006/   (root@pam)\n' "${node}" "${pub}"
+        printf '  %-8s https://%s:8006/   (root@pam)\n' "${node}" "$(lab_url_host "$(state_reach_ip "${node}")")"
     done
-    printf '  %-8s https://%s:8007/   (Proxmox Backup Server)\n' "pbs1" "$(state_get ".instances.pbs1.public_ip")"
+    printf '  %-8s https://%s:8007/   (Proxmox Backup Server)\n' "pbs1" "$(lab_url_host "$(state_reach_ip "pbs1")")"
 
     printf '\n%sSSH%s\n' "${C_BOLD}" "${C_RESET}"
     for node in $(lab_node_list); do
-        printf '  ssh -i %s root@%s\n' "${PVE_SSH_KEY_PATH}" "$(state_get ".instances.${node}.public_ip")"
+        printf '  ssh -i %s %s@%s\n' "${PVE_SSH_KEY_PATH}" "${SSH_USER}" "$(lab_url_host "$(state_reach_ip "${node}")")"
     done
 
     printf '\n%sCredentials%s\n' "${C_BOLD}" "${C_RESET}"
@@ -1052,7 +1398,7 @@ lab_print_summary() {
 
     # Where the guests actually ended up.
     local first_priv placement
-    first_priv="$(state_get ".instances.${first_node}.private_ip")"
+    first_priv="$(state_reach_ip "${first_node}")"
     placement="$(pve_cmd "${first_priv}" "pvesh get /cluster/resources --output-format json" 2>/dev/null \
         | jq -r '.[] | select(.type == "qemu" or .type == "lxc") | "  \(.type) \(.vmid)\t\(.name)\t\(.node)"' 2>/dev/null || true)"
     if [ -n "${placement}" ]; then

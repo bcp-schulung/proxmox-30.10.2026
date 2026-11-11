@@ -51,8 +51,8 @@ status="$(ex_out "curl -sk --max-time 10 https://localhost:8006/api2/json/cluste
 ex_assert_contains "the API answers on /api2/json/cluster/status" "${status}" "data"
 
 # pvesh and the raw API have to agree.
-pvesh_count="$(ex_out "pvesh get /cluster/resources --output-format json 2>/dev/null | jq 'length'")"
-api_count="$(ex_out "curl -sk --max-time 10 https://localhost:8006/api2/json/cluster/resources 2>/dev/null | jq '.data | length'")"
+pvesh_count="$(ex_out "pvesh get /cluster/resources --output-format json 2>/dev/null | /opt/exercises/lib/ex-json.sh 'length'")"
+api_count="$(ex_out "curl -sk --max-time 10 https://localhost:8006/api2/json/cluster/resources 2>/dev/null | /opt/exercises/lib/ex-json.sh '.data | length'")"
 ex_assert_not_empty "pvesh returns the resources" "${pvesh_count}"
 ex_assert_eq "pvesh and the raw API agree" "${pvesh_count}" "${api_count}"
 
@@ -65,7 +65,7 @@ tokens="$(ex_out "pveum user token list automation@pve 2>/dev/null")"
 ex_assert_contains "the token automation@pve!terraform exists" "${tokens}" "terraform"
 
 privsep="$(ex_out "pveum user token list automation@pve --output-format json 2>/dev/null \
-    | jq -r '.[] | select(.tokenid==\"terraform\") | .privsep'")"
+    | /opt/exercises/lib/ex-json.sh '.[] | select(.tokenid==\"terraform\") | .privsep'")"
 ex_assert_eq "the token has privilege separation enabled" "1" "${privsep}"
 
 token_acl="$(ex_out "pveum acl list 2>/dev/null | grep 'automation@pve!terraform'")"
@@ -117,7 +117,7 @@ ex_section "The storage through the API"
 stor="$(ex_out "pvesh get /storage --output-format json 2>/dev/null")"
 ex_assert_contains "the storages are visible through the API" "${stor}" "nfs-lab"
 
-nfs_content="$(ex_out "pvesh get /storage/nfs-lab --output-format json 2>/dev/null | jq -r '.content // \"\"'")"
+nfs_content="$(ex_out "pvesh get /storage/nfs-lab --output-format json 2>/dev/null | /opt/exercises/lib/ex-json.sh '.content // \"\"'")"
 ex_assert_contains "the content types are visible through the API" \
     "${nfs_content}" "iso"
 

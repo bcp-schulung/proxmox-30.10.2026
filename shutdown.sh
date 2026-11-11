@@ -71,7 +71,7 @@ done
 shutdown_guests_on_node() {
     local node="$1"
     local priv
-    priv="$(state_get ".instances.${node}.private_ip")"
+    priv="$(state_reach_ip "${node}")"
 
     if ! ssh_exec_q "${priv}" "true"; then
         log_warn "${node}: not reachable - skipping the guest shutdown"
@@ -177,7 +177,7 @@ do_start_instances() {
     log_info "Waiting for the Proxmox nodes to come back..."
     local node priv
     for node in $(lab_node_list); do
-        priv="$(state_get ".instances.${node}.private_ip")"
+        priv="$(state_reach_ip "${node}")"
         if wait_ssh "${priv}" "${BOOT_TIMEOUT}"; then
             log_ok "${node} is reachable again"
         else

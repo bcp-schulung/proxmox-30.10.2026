@@ -206,3 +206,62 @@ print_banner() {
     printf '%s  %s%s\n' "${C_BOLD}" "$*" "${C_RESET}" >&2
     printf '%s%s%s\n\n' "${C_BOLD}" "======================================================================" "${C_RESET}" >&2
 }
+
+# ---------------------------------------------------------------------------
+# The destruction guard
+# ---------------------------------------------------------------------------
+# Nothing in this harness destroys a guest, a volume or an instance without
+# asking first. The seminar lab holds the exercises that are built on top
+# of it, and an accidental "clean up" would throw away hours of work.
+#
+# The guard is deliberately stronger than a yes/no question:
+#
+#   * it lists what is about to be destroyed
+#   * it asks for a typed phrase, so that a stray keystroke cannot
+#     confirm it
+#   * a non-interactive shell (a script, a CI job) is always refused,
+#     because nobody can answer the question
+#
+# The only way past the guard is the environment variable
+# LAB_DESTROY_CONFIRM, which holds the same phrase. It exists for the
+# rare case that the teardown has to run unattended.
+# ---------------------------------------------------------------------------
+
+# LAB_CONFIRM_DESTRUCTION <phrase> <question> <what will be destroyed>
+#
+# Returns 0 when the destruction may proceed.
+lab_confirm_destruction() {
+    local phrase="$1" question="$2" what="$3"
+    local answer
+
+    # The escape hatch for an unattended teardown.
+    if [ "${LAB_DESTROY_CONFIRM:-}" = "${phrase}" ]; then
+        log_warn "The destruction was confirmed through LAB_DESTROY_CONFIRM."
+        return 0
+    fi
+
+    if [ ! -t 0 ]; then
+        log_error "This is not an interactive shell - the destruction cannot be confirmed."
+        log_error "Type the phrase '${phrase}' in the terminal, or set LAB_DESTROY_CONFIRM='${phrase}'."
+        return 1
+    fi
+
+    log_warn ""
+    log_warn "The following will be DESTROYED:"
+    printf '%s\n' "${what}" | sed 's/^/    /' >&2
+    log_warn ""
+
+    printf '%s' "${question}" >&2
+    printf "Type '%s' to confirm: " "${phrase}" >&2
+    read -r answer || answer=""
+
+    if [ "${answer}" != "${phrase}" ]; then
+        return 1
+    fi
+
+    return 0
+}
+
+# The phrase for the different kinds of destruction.
+LAB_CONFIRM_PHRASE_CLUSTER="destroy the guests"
+LAB_CONFIRM_PHRASE_AWS="destroy the lab"

@@ -138,6 +138,12 @@ main() {
 run_phase() {
     local name="$1" func="$2"
 
+    # The operator's public IPv4 address changes over time. The access
+    # rules of the security groups are therefore synced before every
+    # phase, so that the operator does not lose the access to the nodes
+    # while the lab is running.
+    lab_sync_operator_access
+
     # An explicitly requested phase always runs, even when the state file
     # says it is done - the operator asked for it.
     if [ -n "${ONLY_PHASE}" ]; then

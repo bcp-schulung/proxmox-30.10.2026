@@ -12,6 +12,14 @@ set -euo pipefail
 DEVICE="${1:?device required}"
 EXPORT_PATH="${2:?export path required}"
 
+# The device may be given as a bare name ("nvme1n1") or as a full path
+# ("/dev/nvme1n1"). The tools need the full path.
+case "${DEVICE}" in
+    /dev/*) ;;
+    "")     echo "No device given" >&2; exit 1 ;;
+    *)      DEVICE="/dev/${DEVICE}" ;;
+esac
+
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update -qq
@@ -27,7 +35,40 @@ mkdir -p /srv/nfs
 if ! grep -q '^/srv/nfs ' /etc/fstab; then
     printf '/srv/nfs %s ext4 defaults,nofail 0 2\n' "${DEVICE}" >> /etc/fstab
 fi
-mountpoint -q /srv/nfs || mount /srv/nfs
+
+# The mount is retried.
+#
+# A freshly attached EBS volume shows up in the device list before udev
+# has created the device node in /dev. The mount then fails with
+#
+#   fsconfig() failed: Can't lookup blockdev
+#
+# The device node appears a moment later, so the mount is tried again
+# until it works.
+mounted=0
+for _ in $(seq 1 30); do
+    if mountpoint -q /srv/nfs; then
+        mounted=1
+        break
+    fi
+    # The device is given explicitly instead of relying on the fstab
+    # entry: the fstab entry refers to the device by name, and a name
+    # that the kernel has not resolved yet makes the mount fail with
+    # "Can't lookup blockdev".
+    if [ -b "${DEVICE}" ] && mount -t ext4 "${DEVICE}" /srv/nfs 2>/dev/null; then
+        mounted=1
+        break
+    fi
+    sleep 2
+done
+
+if [ "${mounted}" != "1" ]; then
+    echo "Could not mount ${DEVICE} on /srv/nfs" >&2
+    mount /srv/nfs || true
+    exit 1
+fi
+
+echo "${DEVICE} is mounted on /srv/nfs"
 
 # --- the export ------------------------------------------------------------
 # The data directory structure mirrors what Proxmox expects from a storage

@@ -60,7 +60,8 @@ Options:
   --keep-ami        Keep the AMIs (default for --scope all)
   --delete-ami      Also delete the AMIs
   --dry-run         Show what would be removed, change nothing
-  --yes             Do not ask for confirmation
+  --yes             Do not ask the ordinary yes/no question
+                    (the destruction guard still asks for a typed phrase)
   -h, --help        Show this help
 
 Examples:
@@ -240,15 +241,37 @@ main() {
         log_warn "Dry run - nothing will be changed."
     fi
 
-    if [ "${ASSUME_YES}" != "1" ] && [ "${DRY_RUN}" != "1" ]; then
-        local prompt="Remove the lab"
+    if [ "${DRY_RUN}" != "1" ]; then
+        # The destruction guard. It is not skipped by --yes: the flag only
+        # skips the ordinary yes/no question, the guard always asks for
+        # the typed phrase.
+        local phrase prompt what
         case "${SCOPE}" in
-            cluster) prompt="Destroy the guests and reset the cluster (the EC2 instances keep running)?" ;;
-            aws)     prompt="Remove EVERYTHING, including the running EC2 instances?" ;;
-            all)     prompt="Remove EVERYTHING, including the running EC2 instances?" ;;
+            cluster)
+                phrase="${LAB_CONFIRM_PHRASE_CLUSTER}"
+                prompt="Destroy the guests and reset the cluster?"
+                what="the guests (VMs and containers) on every node
+the cluster configuration of pve1, pve2 and pve3
+the contents of the shared NFS export
+(the EC2 instances keep running)"
+                ;;
+            aws|all)
+                phrase="${LAB_CONFIRM_PHRASE_AWS}"
+                prompt="Remove EVERYTHING, including the running EC2 instances?"
+                what="the guests (VMs and containers) on every node
+the cluster configuration of pve1, pve2 and pve3
+the contents of the shared NFS export
+every EC2 instance of the lab
+every EBS volume of the lab
+the VPC, the subnets, the route tables, the internet gateways,
+the security groups and the network interfaces of the lab
+the key pair
+the state file and the generated .env"
+                ;;
         esac
-        if ! confirm "${prompt}" "no"; then
-            log_info "Aborted."
+
+        if ! lab_confirm_destruction "${phrase}" "${prompt}" "${what}"; then
+            log_info "Aborted - nothing was destroyed."
             return 0
         fi
     fi

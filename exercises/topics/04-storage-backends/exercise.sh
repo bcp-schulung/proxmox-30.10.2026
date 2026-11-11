@@ -71,27 +71,13 @@ ex_assert_contains "pbs-main points at the backup server" "${pbs_block}" "10.20.
 ex_assert_contains "pbs-main uses the datastore main" "${pbs_block}" "datastore main"
 
 # The shared storages have to be active on every node.
-shared_nodes="$(ex_run "
-    for n in \$(pvecm nodes | awk 'NR>1 && \\\$3 ~ /^[0-9]+\\\$/ {print \\\$3}'); do
-        if ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 \
-               \"root@\$n\" 'pvesm status --storage nfs-lab' 2>/dev/null | grep -q active; then
-            echo \"\$n\"
-        fi
-    done" 2>/dev/null | tr '\n' ' ')"
+shared_nodes="$(ex_remote_members "pvesm status --storage nfs-lab | grep -c active" | grep -c '^[1-9]')"
 
-case "${shared_nodes}" in
-    '')
-        ex_skip "the shared scope cannot be checked from this node"
-        ;;
-    *)
-        count="$(printf '%s' "${shared_nodes}" | wc -w | tr -d ' ')"
-        if [ "${count}" -ge 3 ]; then
-            ex_pass "nfs-lab is active on all three nodes"
-        else
-            ex_fail "nfs-lab is active on all three nodes (only ${count})"
-        fi
-        ;;
-esac
+if [ "${shared_nodes:-0}" -ge 2 ]; then
+    ex_pass "nfs-lab is active on all three nodes (${shared_nodes} other nodes confirm it)"
+else
+    ex_fail "nfs-lab is active on all three nodes (${shared_nodes:-0} other nodes confirm it)"
+fi
 
 # =============================================================================
 # The content types
@@ -117,7 +103,8 @@ marker="/mnt/pve/nfs-lab/.exercise-shared-test"
 
 if ex_ok "echo 'shared storage test' > ${marker} 2>/dev/null"; then
     remote="$(ex_run "
-        for n in \$(pvecm nodes | awk 'NR>1 && \\\$3 ~ /^[0-9]+\\\$/ {print \\\$3}'); do
+        for ip in \$(awk '/^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+[[:space:]]+pve[0-9]/ {print \$1}' /etc/hosts); do
+            n=\$(awk -v ip=\"\$ip\" '\$1==ip {for(i=2;i<=NF;i++) if(\$i ~ /^pve[0-9]+\$/) print \$i}' /etc/hosts | head -1)
             [ \"\$n\" = \"\$(hostname)\" ] && continue
             if ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 \
                    \"root@\$n\" 'cat ${marker}' 2>/dev/null | grep -q 'shared storage test'; then

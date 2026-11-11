@@ -23,7 +23,9 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EX_ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# The exercise tree is the directory this script lives in.
+EX_ROOT_DIR="${SCRIPT_DIR}"
+# The lab harness is the repository root, one level above.
 HARNESS_DIR="$(cd "${EX_ROOT_DIR}/.." && pwd)"
 
 # shellcheck source=../lib/exlib.sh
@@ -43,11 +45,17 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# shellcheck source=../lib/ssh.sh
+# The lab harness. Its libraries expect common.sh to be sourced first,
+# because that is where LAB_LIB_DIR and LAB_ROOT_DIR are set.
 if [ -f "${HARNESS_DIR}/lib/ssh.sh" ]; then
-    . "${HARNESS_DIR}/lib/ssh.sh"
-    . "${HARNESS_DIR}/lib/state.sh"
+    # shellcheck source=../lib/common.sh
+    . "${HARNESS_DIR}/lib/common.sh"
+    # shellcheck source=../lib/config.sh
     . "${HARNESS_DIR}/lib/config.sh"
+    # shellcheck source=../lib/state.sh
+    . "${HARNESS_DIR}/lib/state.sh"
+    # shellcheck source=../lib/ssh.sh
+    . "${HARNESS_DIR}/lib/ssh.sh"
     load_config >/dev/null 2>&1 || true
 fi
 
@@ -80,10 +88,27 @@ node_target() {
         host="${node}"
     fi
 
-    # The lab's SSH user is 'admin'; the Proxmox root is 'root'.
-    user="${EX_SSH_USER:-root}"
+    # The lab's SSH user is 'admin' - the Proxmox root account has no key
+    # installed, because the Debian cloud image logs in as 'admin' and
+    # cloud-init does not put a key into root's authorized_keys.
+    user="${EX_SSH_USER:-${SSH_USER:-admin}}"
 
     printf '%s@%s' "${user}" "${host}"
+}
+
+# The SSH options. The harness builds them; they carry the key and the
+# host key policy that a fresh node needs.
+ssh_opts() {
+    if command -v ssh_options >/dev/null 2>&1; then
+        ssh_options
+        return 0
+    fi
+    printf '%s\n' "-i" "${EX_SSH_KEY:-${PVE_SSH_KEY_PATH:-${HARNESS_DIR}/.state/keys/pve-lab.pem}}" \
+        "-o" "StrictHostKeyChecking=no" \
+        "-o" "UserKnownHostsFile=/dev/null" \
+        "-o" "LogLevel=ERROR" \
+        "-o" "ConnectTimeout=15" \
+        "-o" "BatchMode=yes"
 }
 
 deploy_to() {
@@ -95,20 +120,29 @@ deploy_to() {
 
     case "${MODE}" in
         remove)
-            ssh "${target}" "sudo rm -rf ${TARGET_DIR}" 2>/dev/null \
+            ssh $(ssh_opts) "${target}" "sudo rm -rf ${TARGET_DIR}" 2>/dev/null \
                 && printf '  removed %s\n' "${TARGET_DIR}" \
                 || printf '  could not reach %s\n' "${target}"
             ;;
         list)
-            ssh "${target}" "ls -1 ${TARGET_DIR} 2>/dev/null" 2>/dev/null \
+            ssh $(ssh_opts) "${target}" "ls -1 ${TARGET_DIR} 2>/dev/null" 2>/dev/null \
                 | sed 's/^/  /' \
                 || printf '  could not reach %s\n' "${target}"
             ;;
         deploy)
             # The archive is streamed over SSH and unpacked on the node.
-            tar -czf - -C "${EX_ROOT_DIR}" . 2>/dev/null | \
-                ssh "${target}" "sudo mkdir -p ${TARGET_DIR} && sudo tar -xzf - -C ${TARGET_DIR} && \
-                    sudo chmod +x ${TARGET_DIR}/validate.sh ${TARGET_DIR}/long-exercise/nordwind-platform/*.sh \
+            #
+            # macOS adds extended attribute headers to every file, and the
+            # GNU tar on the node warns about each of them. That floods the
+            # output and buries the result. The archive is therefore built
+            # without the extended attributes.
+            COPYFILE_DISABLE=1 tar --no-xattrs -czf - -C "${EX_ROOT_DIR}" . 2>/dev/null | \
+                ssh $(ssh_opts) "${target}" "sudo mkdir -p ${TARGET_DIR} && sudo tar -xzf - -C ${TARGET_DIR} && \
+                    sudo chmod +x ${TARGET_DIR}/validate.sh ${TARGET_DIR}/deploy.sh \
+                                 ${TARGET_DIR}/lib/ex-members.sh \
+                                 ${TARGET_DIR}/lib/ex-json.sh \
+                                 ${TARGET_DIR}/lib/ex-json-filter.py \
+                                 ${TARGET_DIR}/long-exercise/nordwind-platform/*.sh \
                                  ${TARGET_DIR}/topics/*/exercise.sh && \
                     sudo chown -R root:root ${TARGET_DIR} && \
                     echo OK" 2>/dev/null \

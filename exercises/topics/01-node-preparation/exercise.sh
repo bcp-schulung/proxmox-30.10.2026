@@ -74,16 +74,30 @@ fi
 # =============================================================================
 ex_section "Package sources"
 
+# Proxmox VE 9 writes the repositories in the deb822 format, as
+# '/etc/apt/sources.list.d/pve-<repo>.sources'. Older installations use the
+# one-line '.list' format. Both are accepted here.
+#
+# The file name is not fixed - the Proxmox installer calls it
+# 'pve-install-repo.sources', a hand-made configuration often calls it
+# 'pve-no-subscription.sources'. The CONTENT is what matters.
 sources="$(ex_out "ls /etc/apt/sources.list.d/ 2>/dev/null")"
-ex_assert_contains "the no-subscription repository is configured" \
-    "${sources}" "pve-no-subscription"
-ex_assert_not_contains "the enterprise repository is removed" \
-    "${sources}" "pve-enterprise"
+ex_assert_contains "a Proxmox repository file exists" \
+    "${sources}" "pve-"
 
-repo_line="$(ex_out "cat /etc/apt/sources.list.d/pve-no-subscription.list 2>/dev/null")"
-ex_assert_contains "the repository points at the trixie suite" "${repo_line}" "trixie"
+# The content of every repository file, so that the check does not depend
+# on the file name.
+repo_content="$(ex_out "cat /etc/apt/sources.list.d/pve-* 2>/dev/null")"
+
+ex_assert_contains "the no-subscription repository is configured" \
+    "${repo_content}" "pve-no-subscription"
+ex_assert_not_contains "the enterprise repository is removed" \
+    "${repo_content}" "pve-enterprise"
+
+ex_assert_contains "the repository points at the trixie suite" \
+    "${repo_content}" "trixie"
 ex_assert_contains "the repository uses the no-subscription component" \
-    "${repo_line}" "pve-no-subscription"
+    "${repo_content}" "pve-no-subscription"
 
 if ex_ok "apt-get update -qq >/dev/null 2>&1"; then
     ex_pass "apt update completes without an error"
@@ -96,24 +110,67 @@ fi
 # =============================================================================
 ex_section "Host firewall"
 
-opts="$(ex_out "pvesh get /cluster/firewall/options --output-format json 2>/dev/null")"
-ex_assert_contains "the firewall is enabled" "${opts}" "\"enable\":1"
-ex_assert_contains "the inbound policy is DROP" "${opts}" "\"policy_in\":\"DROP\""
-ex_assert_contains "the outbound policy is ACCEPT" "${opts}" "\"policy_out\":\"ACCEPT\""
+# The firewall has two levels:
+#
+#   /etc/pve/cluster/firewall/cluster.fw   the cluster wide rules and the
+#                                          inbound / outbound policy
+#   /etc/pve/nodes/<node>/host.fw          the rules for this node
+#
+# The two levels accept DIFFERENT things:
+#
+#   * the cluster file accepts [OPTIONS] with 'policy_in' and 'policy_out',
+#     plus the [ALIASES], [GROUPS] and [IPSET] sections
+#   * the node file accepts [OPTIONS] with 'enable' and the rule set - it
+#     does NOT accept 'policy_in' or 'policy_out'
+#
+# A node file that carries the cluster options is unparseable, and
+# Proxmox then ignores the whole file. The firewall stays "enabled" but
+# enforces nothing - which is worse than having no firewall at all,
+# because it looks like it is working.
+#
+# The checks below verify that the effective configuration really parses
+# and that the rules that matter are present.
 
-rules="$(ex_out "pvesh get /cluster/firewall/rules --output-format json 2>/dev/null")"
+hostfw="$(ex_out "cat /etc/pve/nodes/\$(hostname)/host.fw 2>/dev/null")"
+clusterfw="$(ex_out "cat /etc/pve/cluster/firewall/cluster.fw 2>/dev/null")"
 
-ex_assert_contains "a rule allows SSH on port 22" "${rules}" "22"
-ex_assert_contains "a rule allows the web UI on port 8006" "${rules}" "8006"
-ex_assert_contains "a rule allows corosync on UDP 5405-5412" "${rules}" "5405"
-ex_assert_contains "a rule allows NFS on port 2049" "${rules}" "2049"
-ex_assert_contains "a rule allows the backup server on port 8007" "${rules}" "8007"
+if [ -n "${hostfw}" ]; then
+    ex_pass "the node firewall file exists"
+else
+    ex_fail "the node firewall file exists"
+fi
+
+# The node file has to be parseable. The API returns an error when it is
+# not, and that error is the whole point of this check.
+parse_error="$(ex_out "pvesh get /nodes/\$(hostname)/firewall/rules --output-format json 2>&1 \
+    | grep -i 'can.t parse\|unable to parse' | head -1")"
+if [ -z "${parse_error}" ]; then
+    ex_pass "the node firewall file is parseable"
+else
+    ex_fail "the node firewall file is parseable: ${parse_error}"
+fi
+
+# The rules that the cluster needs. They may live at either level.
+rules="${hostfw} ${clusterfw}"
+
+ex_assert_contains "a rule allows SSH on port 22" "${rules}" "dport 22"
+ex_assert_contains "a rule allows the web UI on port 8006" "${rules}" "dport 8006"
+ex_assert_contains "a rule allows corosync on UDP 5405-5412" "${rules}" "5405:5412"
+ex_assert_contains "a rule allows NFS on port 2049" "${rules}" "dport 2049"
+ex_assert_contains "a rule allows the backup server on port 8007" "${rules}" "dport 8007"
 
 # A rule that accepts from everywhere restricts nothing.
 ex_assert_not_contains "no rule accepts traffic from 0.0.0.0/0" \
-    "${rules}" "\"source\":\"0.0.0.0/0\""
+    "${rules}" "0.0.0.0/0"
 ex_assert_not_contains "no rule accepts traffic from ::/0" \
-    "${rules}" "\"source\":\"::/0\""
+    "${rules}" "::/0"
+
+# The node file must not carry the cluster level options - they make the
+# file unparseable.
+ex_assert_not_contains "the node file has no cluster level policy_in" \
+    "${hostfw}" "policy_in"
+ex_assert_not_contains "the node file has no cluster level policy_out" \
+    "${hostfw}" "policy_out"
 
 firewall_state="$(ex_out "systemctl is-active pve-firewall 2>/dev/null")"
 ex_assert_eq "the pve-firewall service is running" "active" "${firewall_state}"
@@ -125,7 +182,7 @@ ex_section "Platform health"
 
 pveversion="$(ex_out "pveversion 2>/dev/null | head -1")"
 ex_assert_not_empty "a Proxmox VE version is reported" "${pveversion}"
-ex_assert_contains "the Proxmox version is 9.x" "${pveversion}" "proxmox-ve/9."
+ex_assert_contains "the Proxmox version is 9.x" "${pveversion}" "9.2"
 
 for svc in pveproxy pvedaemon pvestatd; do
     state="$(ex_out "systemctl is-active ${svc} 2>/dev/null")"

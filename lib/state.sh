@@ -159,3 +159,58 @@ state_show() {
                with_entries(if (.key | test("password|secret|token"; "i")) then .value = "<redacted>" else . end)
            else . end)' "${STATE_FILE}"
 }
+
+# The address the operator uses to reach an instance.
+#
+# This is the IPv6 address when the instance has one. The private IPv4
+# address is only reachable from inside the VPC, and the public IPv4 address
+# is unreachable from a CGNAT network, so the IPv6 address is the one that
+# actually works from the operator's laptop.
+state_reach_ip() {
+    local name="$1" addr
+    addr="$(state_get ".instances.${name}.reach_ip")"
+    if [ -n "${addr}" ]; then
+        printf '%s' "${addr}"
+        return 0
+    fi
+    # Older state files have no reach_ip - fall back to the public address.
+    addr="$(state_get ".instances.${name}.public_ip")"
+    [ -n "${addr}" ] || addr="$(state_get ".instances.${name}.private_ip")"
+    printf '%s' "${addr}"
+}
+
+# Every address the operator could use to reach an instance, most likely
+# first.
+#
+# The IPv6 address comes first: it survives a change of the operator's
+# public IPv4 address, which happens on a network with a NAT. But a network
+# without native IPv6 cannot reach it at all, so the public IPv4 address is
+# tried as well.
+state_reach_ips() {
+    local name="$1"
+    local v6 pub priv
+
+    v6="$(state_get ".instances.${name}.ipv6")"
+    pub="$(state_get ".instances.${name}.public_ip")"
+    priv="$(state_get ".instances.${name}.private_ip")"
+    local reach
+    reach="$(state_get ".instances.${name}.reach_ip")"
+
+    # The public IPv4 address comes first.
+    #
+    # The IPv6 address is the better address in principle - it survives a
+    # change of the operator's public IPv4 address. But a network without
+    # native IPv6 cannot reach it at all, and every attempt then costs a
+    # full connection timeout. The IPv4 address is tried first, and the
+    # IPv6 address is only used when there is no IPv4 address.
+    if [ -n "${pub}" ]; then
+        printf '%s ' "${pub}"
+    elif [ -n "${reach}" ]; then
+        printf '%s ' "${reach}"
+    fi
+
+    [ -n "${v6}" ] && [ -z "${pub}" ] && printf '%s ' "${v6}"
+    [ -n "${priv}" ] && printf '%s ' "${priv}"
+
+    return 0
+}

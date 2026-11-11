@@ -161,6 +161,123 @@ aws_igw_create() {
     printf '%s' "${igw_id}"
 }
 
+# --- IPv6 -------------------------------------------------------------------
+#
+# IPv6 is what makes the lab reachable from a CGNAT network. The operator's
+# IPv4 address is very often a carrier translation, and EC2 instance public
+# IPv4 addresses are unreachable from such a network. A native IPv6 address
+# is not translated, so it is the address the operator uses.
+
+aws_vpc_ipv6_cidr() {
+    # The first Amazon-provided IPv6 CIDR of the VPC.
+    aws_cli ec2 describe-vpcs --region "${AWS_REGION}" \
+        --filters "Name=cidr,Values=${VPC_CIDR}" \
+        --query "Vpcs[0].Ipv6CidrBlockAssociationSet[?Ipv6CidrBlockState.State==\`associated\`].Ipv6CidrBlock | [0]" \
+        --output text 2>/dev/null | sed 's/^None$//'
+}
+
+aws_vpc_ipv6_associate() {
+    # Associate an Amazon-provided IPv6 /56 with the VPC.
+    #
+    # The flag is a boolean switch - it takes no value. Passing a CIDR at
+    # the same time is rejected with InvalidParameterCombination.
+    aws_cli ec2 associate-vpc-cidr-block --region "${AWS_REGION}" \
+        --vpc-id "$(aws_vpc_id)" \
+        --amazon-provided-ipv6-cidr-block >/dev/null
+}
+
+aws_vpc_ipv6_state() {
+    aws_cli ec2 describe-vpcs --region "${AWS_REGION}" \
+        --filters "Name=cidr,Values=${VPC_CIDR}" \
+        --query "Vpcs[0].Ipv6CidrBlockAssociationSet[].Ipv6CidrBlockState.State" \
+        --output text 2>/dev/null | tr ' \t' '\n' | grep -v '^$' | head -1
+}
+
+aws_vpc_ipv6_wait() {
+    # Wait until the VPC IPv6 association is usable.
+    local i state
+    for i in $(seq 1 30); do
+        state="$(aws_vpc_ipv6_state)"
+        if [ "${state}" = "associated" ]; then
+            return 0
+        fi
+        sleep 10
+    done
+    return 1
+}
+
+aws_subnet_ipv6_associate() {
+    # aws_subnet_ipv6_associate <subnet-id> <ipv6-cidr>
+    #
+    # The subnet CIDR must be a /64 carved out of a /56 that is associated
+    # with the VPC. A /64 outside the VPC's own blocks is rejected.
+    aws_cli ec2 associate-subnet-cidr-block --region "${AWS_REGION}" \
+        --subnet-id "$1" --ipv6-cidr-block "$2" >/dev/null
+}
+
+aws_subnet_ipv6_cidr() {
+    # aws_subnet_ipv6_cidr <subnet-id>
+    aws_cli ec2 describe-subnets --region "${AWS_REGION}" --subnet-ids "$1" \
+        --query 'Subnets[0].Ipv6CidrBlockAssociationSet[?Ipv6CidrBlockState.State==`associated`].Ipv6CidrBlock | [0]' \
+        --output text 2>/dev/null | sed 's/^None$//'
+}
+
+aws_subnet_ipv6_enable_auto() {
+    aws_cli ec2 modify-subnet-attribute --region "${AWS_REGION}" \
+        --subnet-id "$1" --assign-ipv6-address-on-creation >/dev/null
+}
+
+aws_eigw_id() {
+    aws_cli ec2 describe-egress-only-internet-gateways --region "${AWS_REGION}" \
+        --filters "Name=vpc-id,Values=$(aws_vpc_id)" \
+        --query "EgressOnlyInternetGateways[0].EgressOnlyInternetGatewayId" \
+        --output text 2>/dev/null | sed 's/^None$//'
+}
+
+aws_eigw_create() {
+    # An egress-only internet gateway routes IPv6 traffic out of a subnet
+    # that has no public IPv4 address. A NAT gateway cannot be the next hop
+    # for an IPv6 destination.
+    local eigw_id
+    eigw_id="$(aws_cli ec2 create-egress-only-internet-gateway --region "${AWS_REGION}" \
+        --vpc-id "$(aws_vpc_id)" \
+        --query "EgressOnlyInternetGateway.EgressOnlyInternetGatewayId" --output text)"
+    aws_tag_lab "${eigw_id}" "eigw" "igw"
+    printf '%s' "${eigw_id}"
+}
+
+aws_route_ipv6() {
+    # aws_route_ipv6 <route-table-id> <ipv6-cidr> <gateway-type> <gateway-id>
+    local rtb="$1" cidr="$2" gwtype="$3" gwid="$4" perms
+    case "${gwtype}" in
+        internet-gateway) perms="--gateway-id ${gwid}" ;;
+        egress-only-internet-gateway) perms="--egress-only-internet-gateway-id ${gwid}" ;;
+        *) return 1 ;;
+    esac
+    aws_cli ec2 create-route --region "${AWS_REGION}" \
+        --route-table-id "${rtb}" --destination-ipv6-cidr-block "${cidr}" \
+        ${perms} >/dev/null
+}
+
+aws_instance_ipv6() {
+    # The first IPv6 address assigned to the instance's primary interface.
+    # The address comes from the subnet, so it is globally routable.
+    aws_cli ec2 describe-instances --region "${AWS_REGION}" --instance-ids "$1" \
+        --query 'Reservations[0].Instances[0].NetworkInterfaces[0].Ipv6Addresses[0].Ipv6Address' \
+        --output text 2>/dev/null | sed 's/^None$//'
+}
+
+aws_eni_ipv6() {
+    aws_cli ec2 describe-network-interfaces --region "${AWS_REGION}" --network-interface-ids "$1" \
+        --query 'NetworkInterfaces[0].Ipv6Addresses[0].Ipv6Address' --output text 2>/dev/null | sed 's/^None$//'
+}
+
+# The IPv6 default gateway of a subnet. It is the link-local address of the
+# router, which AWS puts at the first address of the /64.
+aws_ipv6_gateway() {
+    printf 'fe80::1'
+}
+
 aws_natgw_create() {
     # NAT gateway in the public subnet, for the private subnets and for the
     # guest overlay traffic that is masqueraded out of the Proxmox nodes.
@@ -222,6 +339,15 @@ aws_route_to() {
     esac
 }
 
+aws_route_delete() {
+    # aws_route_delete <route-table-id> <cidr>
+    #
+    # A route table can only have one default route, so a route has to be
+    # deleted before another one is created for the same destination.
+    aws_cli ec2 delete-route --region "${AWS_REGION}" \
+        --route-table-id "$1" --destination-cidr-block "$2" >/dev/null 2>&1 || true
+}
+
 aws_associate_route_table() {
     # aws_associate_route_table <subnet-id> <route-table-id>
     aws_cli ec2 associate-route-table --region "${AWS_REGION}" \
@@ -239,25 +365,88 @@ aws_sg_create() {
     printf '%s' "${sg_id}"
 }
 
+# aws_sg_revoke <sg-id> <protocol> <port> <cidr>
+#
+# The counterpart of aws_sg_allow. A rule that does not exist is not an
+# error.
+aws_sg_revoke() {
+    local sg="$1" proto="$2" port="$3" cidr="$4"
+    local perms key
+
+    case "${cidr}" in
+        *:*) key="Ipv6Ranges=[{CidrIpv6=\"${cidr}\"}]" ;;
+        *)   key="IpRanges=[{CidrIp=\"${cidr}\"}]" ;;
+    esac
+
+    if [ "${proto}" = "-1" ]; then
+        perms="IpProtocol=-1,${key}"
+    elif [ -z "${port}" ]; then
+        perms="IpProtocol=${proto},${key}"
+    elif printf '%s' "${port}" | grep -q '^[0-9]\+-[0-9]\+$'; then
+        perms="IpProtocol=${proto},FromPort=${port%%-*},ToPort=${port##*-},${key}"
+    else
+        perms="IpProtocol=${proto},FromPort=${port},ToPort=${port},${key}"
+    fi
+
+    aws_cli ec2 revoke-security-group-ingress --region "${AWS_REGION}" \
+        --group-id "${sg}" --ip-permissions "${perms}" >/dev/null 2>&1 || true
+}
+
+# aws_sg_revoke_operator <sg-id>
+#
+# Remove every single-host IPv4 rule from a security group.
+#
+# The operator's public IPv4 address changes: a network with a NAT gives a
+# new address every time the connection is re-established, and a mobile
+# network changes it while the lab is running. A rule that was written
+# during the first provisioning run is therefore useless a few minutes
+# later, and the operator loses the access to the web UI and to SSH.
+#
+# Only rules with a /32 prefix are removed. The rules for the VPC range
+# and the rules for IPv6 are left alone.
+aws_sg_revoke_operator() {
+    local sg="$1" cidr
+    local cidr_list
+
+    cidr_list="$(aws_cli ec2 describe-security-groups --region "${AWS_REGION}" \
+        --group-ids "${sg}" \
+        --query "SecurityGroups[0].IpPermissions[].IpRanges[].CidrIp" \
+        --output text 2>/dev/null || true)"
+
+    for cidr in ${cidr_list}; do
+        case "${cidr}" in
+            */32) aws_sg_revoke "${sg}" tcp 22 "${cidr}" ;;
+        esac
+    done
+}
+
 aws_sg_allow() {
     # aws_sg_allow <sg-id> <protocol> <port> <cidr> [description]
     # <port> may be a single port ("22") or a range ("5900-5999") or empty.
+    #
+    # An IPv6 CIDR has to go into Ipv6Ranges - the API rejects it in
+    # IpRanges, and vice versa.
     local proto="$2" port="$3" cidr="$4" desc="${5:-lab rule}"
-    local perms
+    local perms key
+
+    case "${cidr}" in
+        *:*) key="Ipv6Ranges=[{CidrIpv6=\"${cidr}\"}]" ;;
+        *)   key="IpRanges=[{CidrIp=\"${cidr}\"}]" ;;
+    esac
 
     # The shorthand syntax expects the address inside IpRanges - a bare
     # CidrIp key is rejected by the API.
     if [ "${proto}" = "-1" ]; then
-        perms="IpProtocol=-1,IpRanges=[{CidrIp=\"${cidr}\"}]"
+        perms="IpProtocol=-1,${key}"
     elif [ -z "${port}" ]; then
-        perms="IpProtocol=${proto},IpRanges=[{CidrIp=\"${cidr}\"}]"
+        perms="IpProtocol=${proto},${key}"
     elif printf '%s' "${port}" | grep -q '^[0-9]\+-[0-9]\+$'; then
         local from to
         from="${port%%-*}"
         to="${port##*-}"
-        perms="IpProtocol=${proto},FromPort=${from},ToPort=${to},IpRanges=[{CidrIp=\"${cidr}\"}]"
+        perms="IpProtocol=${proto},FromPort=${from},ToPort=${to},${key}"
     else
-        perms="IpProtocol=${proto},FromPort=${port},ToPort=${port},IpRanges=[{CidrIp=\"${cidr}\"}]"
+        perms="IpProtocol=${proto},FromPort=${port},ToPort=${port},${key}"
     fi
 
     # Adding a rule that already exists is not an error for us - the rules
@@ -315,6 +504,69 @@ aws_volume_create() {
 }
 
 # --- Instances ---------------------------------------------------------------
+
+aws_ssm_instance_profile_name() {
+    printf '%s-ssm' "${LAB_TAG}"
+}
+
+aws_ssm_role_exists() {
+    aws_cli iam get-role --role-name "$(aws_ssm_instance_profile_name)" \
+        >/dev/null 2>&1
+}
+
+aws_ssm_instance_profile_exists() {
+    aws_cli iam get-instance-profile --region "${AWS_REGION}" \
+        --instance-profile-name "$(aws_ssm_instance_profile_name)" \
+        >/dev/null 2>&1
+}
+
+# The IAM role and instance profile that let the SSM agent register with
+# Systems Manager.
+#
+# The agent needs exactly two permissions:
+#   * ssm:UpdateInstanceInformation      - register the instance
+#   * ssmmessages:CreateControlChannel    - the session data channel
+#     ssmmessages:CreateDataChannel
+#     ssmmessages:OpenControlChannel
+#     ssmmessages:OpenDataChannel
+#   * ssm:DescribeInstanceProperties     - required by the session plugin
+#
+# The AWS managed policy AmazonSSMManagedInstanceCore contains exactly this
+# set, so it is used instead of a hand-written policy.
+aws_ssm_instance_profile_create() {
+    local role_name profile_name
+    role_name="$(aws_ssm_instance_profile_name)"
+    profile_name="${role_name}"
+
+    if ! aws_ssm_role_exists; then
+        aws_cli iam create-role --region "${AWS_REGION}" \
+            --role-name "${role_name}" \
+            --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
+            >/dev/null
+        aws_cli iam attach-role-policy --region "${AWS_REGION}" \
+            --role-name "${role_name}" \
+            --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" >/dev/null
+        log_debug "Created IAM role ${role_name}"
+    fi
+
+    if ! aws_ssm_instance_profile_exists; then
+        aws_cli iam create-instance-profile --region "${AWS_REGION}" \
+            --instance-profile-name "${profile_name}" >/dev/null
+        aws_cli iam add-role-to-instance-profile --region "${AWS_REGION}" \
+            --instance-profile-name "${profile_name}" \
+            --role-name "${role_name}" >/dev/null
+        log_debug "Created instance profile ${profile_name}"
+    fi
+
+    printf '%s' "${profile_name}"
+}
+
+aws_ssm_instance_profile_arn() {
+    aws_cli iam get-instance-profile --region "${AWS_REGION}" \
+        --instance-profile-name "$(aws_ssm_instance_profile_name)" \
+        --query 'InstanceProfile.Arn' --output text 2>/dev/null | sed 's/^None$//'
+}
+
 aws_instance_launch() {
     # aws_instance_launch <name> <role> <instance-type> <ami-id> <az>
     #
@@ -327,12 +579,20 @@ aws_instance_launch() {
     netif="$(jq -n \
         --arg subnet_pub "$(aws_subnet_id "${SUBNET_PUBLIC_CIDR}")" \
         --arg sg "$(aws_sg_id "pve-lab")" \
-        '[{DeviceIndex:0,SubnetId:$subnet_pub,AssociatePublicIpAddress:true,Groups:[$sg],DeleteOnTermination:true}]')"
+        '[{DeviceIndex:0,SubnetId:$subnet_pub,AssociatePublicIpAddress:true,Groups:[$sg],DeleteOnTermination:true,Ipv6AddressCount:1}]')"
 
     local bdm
     bdm="$(jq -n --arg size "${PVE_DATA_VOLUME_SIZE}" \
         '[{DeviceName:"/dev/sdf",Ebs:{VolumeSize:($size|tonumber),VolumeType:"gp3",DeleteOnTermination:false,Encrypted:true}}]')"
 
+    # The instance profile gives the SSM agent the credentials it needs to
+    # register. Without it the instance can only be reached over SSH, which
+    # does not work from a CGNAT network.
+    #
+    # The profile is given by name and not by ARN: the AWS CLI parses the
+    # colons of an ARN as the shorthand syntax and rejects the value.
+    local profile_name
+    profile_name="$(aws_ssm_instance_profile_name)"
     local args=(ec2 run-instances --region "${AWS_REGION}"
         --image-id "${ami}"
         --instance-type "${itype}"
@@ -340,8 +600,12 @@ aws_instance_launch() {
         --key-name "${PVE_KEYPAIR_NAME}"
         --placement "{\"AvailabilityZone\":\"${az}\"}"
         --network-interfaces "${netif}"
-        --block-device-mappings "${bdm}"
-        --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${LAB_TAG}-${role}-${name}},{Key=LabTag,Value=${LAB_TAG}},{Key=LabRole,Value=${role}}]"
+        --block-device-mappings "${bdm}")
+    args+=(--iam-instance-profile "Name=${profile_name}")
+    [ -f "${LAB_ROOT_DIR}/packer/scripts/ssm-userdata.sh" ] && \
+        args+=(--user-data "file://${LAB_ROOT_DIR}/packer/scripts/ssm-userdata.sh")
+    args+=(--tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${LAB_TAG}-${role}-${name}},{Key=LabTag,Value=${LAB_TAG}},{Key=LabRole,Value=${role}}]"
+        --tag-specifications "ResourceType=volume,Tags=[{Key=Name,Value=${LAB_TAG}-${role}-${name}-data},{Key=LabTag,Value=${LAB_TAG}},{Key=LabRole,Value=${role}}]"
         --query "Instances[0].InstanceId" --output text)
 
     aws_cli "${args[@]}"
@@ -357,19 +621,31 @@ aws_instance_launch_service() {
     netif="$(jq -n \
         --arg subnet "$(aws_subnet_id "${SUBNET_SERVICES_CIDR}")" \
         --arg sg "$(aws_sg_id "services-lab")" \
-        '[{DeviceIndex:0,SubnetId:$subnet,AssociatePublicIpAddress:true,Groups:[$sg],DeleteOnTermination:true}]')"
+        '[{DeviceIndex:0,SubnetId:$subnet,AssociatePublicIpAddress:true,Groups:[$sg],DeleteOnTermination:true,Ipv6AddressCount:1}]')"
 
     local bdm
     bdm="$(jq -n --arg size "${size}" \
         '[{DeviceName:"/dev/sdf",Ebs:{VolumeSize:($size|tonumber),VolumeType:"gp3",DeleteOnTermination:false,Encrypted:true}}]')"
 
-    aws_cli ec2 run-instances --region "${AWS_REGION}" \
-        --image-id "${ami}" --instance-type "${itype}" \
-        --key-name "${PVE_KEYPAIR_NAME}" \
-        --placement "{\"AvailabilityZone\":\"${az}\"}" \
-        --network-interfaces "${netif}" --block-device-mappings "${bdm}" \
-        --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${LAB_TAG}-${role}-${name}},{Key=LabTag,Value=${LAB_TAG}},{Key=LabRole,Value=${role}}]" \
-        --query "Instances[0].InstanceId" --output text
+    # The instance profile gives the SSM agent the credentials it needs to
+    # register - the only way in from a CGNAT network. The profile is given
+    # by name, because the AWS CLI cannot parse a bare ARN as a value.
+    local profile_name
+    profile_name="$(aws_ssm_instance_profile_name)"
+
+    local args=(ec2 run-instances --region "${AWS_REGION}"
+        --image-id "${ami}" --instance-type "${itype}"
+        --key-name "${PVE_KEYPAIR_NAME}"
+        --placement "{\"AvailabilityZone\":\"${az}\"}"
+        --network-interfaces "${netif}" --block-device-mappings "${bdm}")
+    args+=(--iam-instance-profile "Name=${profile_name}")
+    [ -f "${LAB_ROOT_DIR}/packer/scripts/ssm-userdata.sh" ] && \
+        args+=(--user-data "file://${LAB_ROOT_DIR}/packer/scripts/ssm-userdata.sh")
+    args+=(--tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${LAB_TAG}-${role}-${name}},{Key=LabTag,Value=${LAB_TAG}},{Key=LabRole,Value=${role}}]"
+        --tag-specifications "ResourceType=volume,Tags=[{Key=Name,Value=${LAB_TAG}-${role}-${name}-data},{Key=LabTag,Value=${LAB_TAG}},{Key=LabRole,Value=${role}}]"
+        --query "Instances[0].InstanceId" --output text)
+
+    aws_cli "${args[@]}"
 }
 
 aws_wait_instance_running() {
@@ -392,6 +668,23 @@ aws_instance_private_ip() {
 aws_instance_public_ip() {
     aws_cli ec2 describe-instances --region "${AWS_REGION}" --instance-ids "$1" \
         --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null | sed 's/^None$//'
+}
+
+# The address the harness uses to reach a node.
+#
+# The operator's own IPv4 address is usually a CGNAT translation (a /32 on a
+# 464XLAT network, or a shared address behind a carrier NAT), and EC2
+# instance public IPs are unreachable from such a network. A native IPv6
+# path is not translated, so the nodes are addressed over IPv6 whenever the
+# instance has one.
+aws_instance_reach_ip() {
+    local v6
+    v6="$(aws_instance_ipv6 "$1")"
+    if [ -n "${v6}" ]; then
+        printf '%s' "${v6}"
+        return 0
+    fi
+    aws_instance_public_ip "$1"
 }
 
 aws_instance_eni() {

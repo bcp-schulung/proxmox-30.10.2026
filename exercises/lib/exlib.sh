@@ -29,6 +29,44 @@ fi
 __EXLIB_SOURCED=1
 
 # ---------------------------------------------------------------------------
+# Safety
+# ---------------------------------------------------------------------------
+#
+# The Proxmox host firewall on the lab nodes runs with 'policy_in: DROP'.
+# A rule set that is written wrongly cuts SSH and the web UI off, and there
+# is no way back except the serial console.
+#
+# The exercise scripts therefore only ever READ the firewall configuration.
+# Writing it is part of the exercise, and the students do it by hand, with
+# the ordering rules from the material:
+#
+#     1. write the rules first
+#     2. switch the default deny on afterwards
+#     3. keep a second session open while testing
+#
+# This guard makes sure that a future change to an exercise script cannot
+# accidentally take the cluster offline. Any attempt to write a firewall
+# configuration through the helper is refused.
+
+ex_readonly_refusal() {
+    printf '%s[REFUSED]%s %s\n' "${EX_C_RED}" "${EX_C_RESET}" "$*" >&2
+    printf '%s         The exercise scripts never write the firewall configuration.%s\n' \
+        "${EX_C_DIM}" "${EX_C_RESET}" >&2
+    printf '%s         A wrong rule set with policy_in: DROP locks you out of the node.%s\n' \
+        "${EX_C_DIM}" "${EX_C_RESET}" >&2
+    printf '%s         Write the rules first, then the default deny, and keep a second SSH%s\n' \
+        "${EX_C_DIM}" "${EX_C_RESET}" >&2
+    printf '%s         session open while you test.%s\n' "${EX_C_DIM}" "${EX_C_RESET}" >&2
+    return 1
+}
+
+# A firewall write helper that always refuses. It exists so that the
+# intent is explicit if someone tries to add one later.
+ex_firewall_write_refused() {
+    ex_readonly_refusal "the firewall configuration cannot be written from here"
+}
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
@@ -259,6 +297,21 @@ ex_detect_mode() {
     EX_MODE="ssh"
 }
 
+# The path of the JSON helper, as the TARGET sees it.
+#
+# In local mode the file is where it is in the repository. In SSH mode the
+# node has its own copy in /opt/exercises, and the command runs THERE -
+# so the path has to be the one of the node, not the one of the
+# workstation.
+EX_JSON_CMD=""
+
+ex_set_json_cmd() {
+    if [ "${EX_MODE}" = "local" ]; then
+        EX_JSON_CMD="${EX_LIB_DIR}/ex-json.sh"
+    else
+        EX_JSON_CMD="/opt/exercises/lib/ex-json.sh"
+    fi
+}
 # Run a command against the cluster. stdout and stderr are captured.
 #
 #   ex_run <command string>
@@ -269,6 +322,8 @@ ex_run() {
     local cmd="$1"
 
     ex_detect_mode
+    ex_set_json_cmd
+    ex_set_members_cmd
 
     if [ "${EX_MODE}" = "local" ]; then
         bash -c "${cmd}" 2>&1
@@ -300,37 +355,162 @@ ex_ok() {
 # ---------------------------------------------------------------------------
 
 # The node names in the cluster.
+#
+# 'pvecm nodes' prints a table like this:
+#
+#     Membership information
+#     ----------------------
+#         Nodeid      Votes Name
+#              1          1 pve1 (local)
+#              2          1 pve2
+#
+# The name is the third field, and the local node carries a ' (local)'
+# suffix that has to be stripped.
 ex_nodes() {
-    ex_out "pvecm nodes 2>/dev/null | awk 'NR>1 && \$3 ~ /^[0-9]+$/ {print \$3}'"
+    ex_out "pvecm nodes 2>/dev/null | sed -nE 's/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+[[:space:]]*([a-zA-Z0-9._-]*).*/\1/p' | sort"
 }
 
 # The number of cluster members.
+#
+# 'pvecm status' prints the members with their ADDRESS, 'pvecm nodes'
+# prints them with their NAME. The name is what the exercises work with,
+# so the count comes from 'pvecm nodes'.
 ex_member_count() {
     local n
-    n="$(ex_out "pvecm status 2>/dev/null | grep -c '^[0-9]*:'")"
+    n="$(ex_out "pvecm nodes 2>/dev/null | grep -cE '^[[:space:]]*[0-9]+[[:space:]]+[0-9]+[[:space:]]+[a-zA-Z0-9._-]+'")"
     printf '%s' "${n:-0}"
 }
 
 # Is the cluster quorate? "yes" / "no" / "unknown"
 ex_quorate() {
     local q
-    q="$(ex_out "pvecm status 2>/dev/null | grep -i 'quorate' | head -1")"
+    q="$(ex_out "pvecm status 2>/dev/null | grep -i 'Flags:' | head -1")"
     case "${q}" in
-        *Yes*) printf 'yes' ;;
-        *No*)  printf 'no' ;;
-        *)    printf 'unknown' ;;
+        *Quorate*) printf 'yes' ;;
+        *) printf 'no' ;;
     esac
 }
 
+# The quorum value. Empty when it cannot be read.
+ex_quorum() {
+    ex_out "pvecm status 2>/dev/null | sed -nE 's/^[[:space:]]*Quorum:[[:space:]]*([0-9]+).*/\1/p' | head -1"
+}
+
+# The name of the cluster.
+ex_cluster_name() {
+    ex_out "pvecm status 2>/dev/null | sed -nE 's/^[[:space:]]*Name:[[:space:]]*([^[:space:]]*).*/\1/p' | head -1"
+}
+
+# The management interface of the node. It is not always called 'eth0' -
+# on the Proxmox installer and on the AWS images it is often 'enp39s0'.
+ex_mgmt_if() {
+    local dev
+    dev="$(ex_out "ip -o route show default 2>/dev/null | cut -d' ' -f5 | head -1")"
+    if [ -z "${dev}" ]; then
+        dev="$(ex_out "ip -o route show default 2>/dev/null | grep -oE 'dev [a-zA-Z0-9._-]+' | cut -d' ' -f2 | head -1")"
+    fi
+    printf '%s' "${dev}"
+}
+
+# The guest bridge.
+ex_bridge() {
+    ex_out "ip -o link show type bridge 2>/dev/null | cut -d' ' -f2 | tr -d ':' | head -1"
+}
+
+# Is the cluster filesystem a pmxcfs mount? The 'stat -f' output depends
+# on the kernel: 'fuse.pmxcfs' on some, plain 'fuse' on others.
+ex_is_pmxcfs() {
+    local t
+    t="$(ex_out "stat -f -c '%T' /etc/pve 2>/dev/null")"
+    case "${t}" in
+        *pmxcfs*|*fuse*) printf 'yes' ;;
+        *) printf 'no' ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# The other cluster members
+# ---------------------------------------------------------------------------
+#
+# The exercises regularly need to look at the OTHER nodes - to check that a
+# file is visible on them, or to compare their network configuration.
+#
+# The work is done by 'lib/ex-members.sh', which is installed next to this
+# library. Keeping the loop in a separate script avoids the deep quoting
+# that an inline version needs, and it makes the logic readable.
+#
+# The path of the helper script. It sits next to this library, both on the
+# node and in the repository.
+EX_MEMBERS_SCRIPT="${EX_LIB_DIR}/ex-members.sh"
+
+# The path of the helper script, as the TARGET sees it.
+EX_MEMBERS_CMD=""
+
+ex_set_members_cmd() {
+    if [ "${EX_MODE}" = "local" ]; then
+        EX_MEMBERS_CMD="${EX_LIB_DIR}/ex-members.sh"
+    else
+        EX_MEMBERS_CMD="/opt/exercises/lib/ex-members.sh"
+    fi
+}
+
+# ex_remote_members runs a command on every other member and prints the
+# output.
+ex_remote_members() {
+    local cmd="$1"
+    ex_run "$(printf '%q' "${EX_MEMBERS_CMD}") $(printf '%q' "${cmd}")" 2>/dev/null
+}
+
+# The name of the first other member, or an empty string.
+ex_other_member() {
+    ex_run "$(printf '%q' "${EX_MEMBERS_CMD}") --names-only" 2>/dev/null | head -1
+}
+
+# ---------------------------------------------------------------------------
+# JSON
+# ---------------------------------------------------------------------------
+#
+# A Proxmox node does NOT have 'jq' installed. It does have python3.
+# 'lib/ex-json.sh' applies a small jq-like filter to a JSON document that
+# arrives on the standard input. It uses 'jq' when it is available, and
+# the python helper otherwise.
+#
+# ex_json takes the filter as the first argument and the JSON on the
+# standard input. It runs the whole thing on the node, so the JSON never
+# has to travel over the SSH connection.
+ex_json() {
+    local filter="$1"
+    ex_run "$(printf '%q' "${EX_JSON_CMD}") $(printf '%q' "${filter}")" 2>/dev/null
+}
+
+# The path of the JSON helper in the repository.
+EX_JSON_SCRIPT="${EX_LIB_DIR}/ex-json.sh"
+
 # The node a guest runs on. Empty when the guest does not exist.
+#
+# 'pvesh get /cluster/resources --type' only knows 'vm', 'storage', 'node'
+# and 'sdn'. A container is a 'vm' resource too - it is distinguished by
+# its 'type' field, which is 'lxc' for a container and 'qemu' for a VM.
 ex_guest_node() {
     local kind="$1" id="$2"
     if [ "${kind}" = "vm" ]; then
         ex_out "pvesh get /cluster/resources --type vm --output-format json 2>/dev/null \
-            | jq -r --argjson id ${id} '.[] | select(.vmid==\$id) | .node' 2>/dev/null | head -1"
+            | jq -r --argjson id ${id} '.[] | select(.vmid==\$id and .type==\"qemu\") | .node' 2>/dev/null | head -1"
     else
-        ex_out "pvesh get /cluster/resources --type lxc --output-format json 2>/dev/null \
-            | jq -r --argjson id ${id} '.[] | select(.vmid==\$id) | .node' 2>/dev/null | head -1"
+        ex_out "pvesh get /cluster/resources --type vm --output-format json 2>/dev/null \
+            | jq -r --argjson id ${id} '.[] | select(.vmid==\$id and .type==\"lxc\") | .node' 2>/dev/null | head -1"
+    fi
+}
+
+# The number of guests of a kind on the cluster.
+ex_guest_count() {
+    local kind="$1"
+    if [ "${kind}" = "vm" ]; then
+        ex_out "pvesh get /cluster/resources --type vm --output-format json 2>/dev/null \
+            | jq -r '[.[] | select(.type==\"qemu\")] | length' 2>/dev/null"
+    else
+        ex_out "pvesh get /cluster/resources --type vm --output-format json 2>/dev/null \
+            | jq -r '[.[] | select(.type==\"lxc\")] | length' 2>/dev/null"
     fi
 }
 

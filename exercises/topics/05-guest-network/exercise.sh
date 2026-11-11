@@ -36,10 +36,12 @@ esac
 # =============================================================================
 ex_section "The bridge"
 
-bridges="$(ex_out "ip -brief link show type bridge 2>/dev/null | cut -d' ' -f1")"
+bridges="$(ex_out "ip -brief link show type bridge 2>/dev/null | tr -s ' ' | cut -d' ' -f1")"
 ex_assert_contains "the vmbr0 bridge exists" "${bridges}" "vmbr0"
 
-addr="$(ex_out "ip -4 -brief addr show vmbr0 2>/dev/null | cut -d' ' -f3")"
+# 'ip -brief' pads the columns, so the address is the field after the
+# state - which is either UP or UNKNOWN.
+addr="$(ex_out "ip -4 -brief addr show vmbr0 2>/dev/null | tr -s ' ' | cut -d' ' -f3")"
 ex_assert_contains "the bridge has an IPv4 address" "${addr}" "10.10."
 
 # The address has to be the gateway of its own range.
@@ -164,12 +166,7 @@ fi
 # =============================================================================
 ex_section "The consistency between the nodes"
 
-remote_cidrs="$(ex_run "
-    for n in \$(pvecm nodes | awk 'NR>1 && \\\$3 ~ /^[0-9]+\\\$/ {print \\\$3}'); do
-        [ \"\$n\" = \"\$(hostname)\" ] && continue
-        ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 \
-            \"root@\$n\" 'ip -4 -brief addr show vmbr0' 2>/dev/null
-    done" 2>/dev/null | grep -oE '10\.10\.[0-9]+\.[0-9]+' | sort -u | tr '\n' ' ')"
+remote_cidrs="$(ex_remote_members "ip -4 -brief addr show vmbr0" | grep -oE '10\.10\.[0-9]+\.[0-9]+' | sort -u | tr '\n' ' ')"
 
 local_cidr="$(printf '%s' "${addr}" | grep -oE '10\.10\.[0-9]+' | head -1)"
 

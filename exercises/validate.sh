@@ -137,6 +137,40 @@ for lib in "${SCRIPT_DIR}"/lib/*.sh; do
     fi
 done
 
+# The python helper of the JSON filter.
+if [ -f "${SCRIPT_DIR}/lib/ex-json-filter.py" ]; then
+    if python3 -m py_compile "${SCRIPT_DIR}/lib/ex-json-filter.py" 2>&1; then
+        pass "ex-json-filter.py has valid python syntax"
+    else
+        fail "ex-json-filter.py has a python syntax error"
+    fi
+
+    # The helper must not depend on 'jq' - a Proxmox node has no jq.
+    if grep -q 'import jq' "${SCRIPT_DIR}/lib/ex-json-filter.py"; then
+        fail "ex-json-filter.py does not import jq"
+    else
+        pass "ex-json-filter.py does not depend on jq"
+    fi
+else
+    fail "lib/ex-json-filter.py exists"
+fi
+
+# The exercise scripts must not call 'jq' directly - there is no jq on a
+# Proxmox node.
+jq_users=""
+for script in "${SCRIPT_DIR}"/topics/*/exercise.sh \
+               "${SCRIPT_DIR}"/long-exercise/*/exercise.sh; do
+    [ -f "${script}" ] || continue
+    if grep -qE '\|\s*jq\s' "${script}"; then
+        jq_users="${jq_users} $(basename "$(dirname "${script}")")"
+    fi
+done
+if [ -z "${jq_users}" ]; then
+    pass "no exercise script calls jq directly"
+else
+    fail "no exercise script calls jq directly (${jq_users})"
+fi
+
 # -----------------------------------------------------------------------------
 # 4. The long exercise references real topics
 # -----------------------------------------------------------------------------
