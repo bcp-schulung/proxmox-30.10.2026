@@ -1076,7 +1076,21 @@ lab_phase_guests() {
 # Create the golden image VM, turn it into a template and clone it.
 lab_provision_vms() {
     local node="$1" host="$2" ssh_pubkey="$3" guest_password="$4"
+
+    # The template lives on the local LVM-thin storage, the full clones on
+    # the shared NFS storage.
+    #
+    # A linked clone is a snapshot of the template's disk, and a snapshot
+    # is only possible on a storage that supports them. NFS does not, and
+    # the request is refused with
+    #
+    #   Linked clone feature is not supported for 'nfs-lab:9000/...'
+    #
+    # LVM-thin supports snapshots, so the template and the linked clone
+    # live there. The full clones go to the shared storage, so that the
+    # seminar exercises the cluster and the shared storage.
     local storage="${NFS_STORAGE_ID}"
+    local template_storage="${LOCAL_STORAGE_ID}"
 
     if [ "$(state_get ".pve.vms_ready")" = "true" ]; then
         log_info "The VMs are already provisioned"
@@ -1095,7 +1109,7 @@ lab_provision_vms() {
     if ! pve_cmd_q "${host}" "qm status ${template_id} >/dev/null 2>&1"; then
         local ci_yaml
         ci_yaml="$(pve_write_cloudinit "${host}" "${template_id}" "${VM_TEMPLATE_NAME}" "${ssh_pubkey}" "${guest_password}")"
-        pve_vm_create_from_cloudimage "${host}" "${template_id}" "${VM_TEMPLATE_NAME}" "${storage}" "${image}" "${ci_yaml}"
+        pve_vm_create_from_cloudimage "${host}" "${template_id}" "${VM_TEMPLATE_NAME}" "${template_storage}" "${image}" "${ci_yaml}"
         pve_vm_make_template "${host}" "${template_id}"
         log_ok "Template ${template_id} (${VM_TEMPLATE_NAME}) created"
     fi
@@ -1115,7 +1129,10 @@ lab_provision_vms() {
 
     lab_clone_vm "${host}" "${priv}" "${template_id}" "${VM_WEB_ID}" "${VM_WEB_NAME}" "${storage}" full "${ssh_pubkey}" "${guest_password}" "${node}"
     lab_clone_vm "${host2}" "${priv2}" "${template_id}" "${VM_CLONE_FULL_ID}" "${VM_CLONE_FULL_NAME}" "${storage}" full "${ssh_pubkey}" "${guest_password}" "${node}"
-    lab_clone_vm "${host3}" "${priv3}" "${template_id}" "${VM_CLONE_LINKED_ID}" "${VM_CLONE_LINKED_NAME}" "${storage}" linked "${ssh_pubkey}" "${guest_password}" "${node}"
+    # The linked clone needs the storage of the template: it is a
+    # snapshot of the template's disk and cannot be moved to another
+    # storage.
+    lab_clone_vm "${host3}" "${priv3}" "${template_id}" "${VM_CLONE_LINKED_ID}" "${VM_CLONE_LINKED_NAME}" "${template_storage}" linked "${ssh_pubkey}" "${guest_password}" "${node}"
 
     # --- start them ---
     lab_start_vm "${host}" "${priv}" "${VM_WEB_ID}"

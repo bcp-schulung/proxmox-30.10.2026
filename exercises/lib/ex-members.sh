@@ -5,9 +5,21 @@
 # Installed on a Proxmox node. It looks up the other cluster members and
 # runs the given command on each of them over SSH.
 #
-# The node names alone do not resolve on a Proxmox node, and the addresses
-# are not in the cluster configuration either. The reliable source is
-# /etc/hosts, which maps every node name to its management address.
+# WHERE THE MEMBERS COME FROM
+# ---------------------------
+# The node names and their addresses are read from the corosync
+# configuration, /etc/corosync/corosync.conf:
+#
+#     node {
+#       name: pve2
+#       nodeid: 2
+#       quorum_votes: 1
+#       ring0_addr: 10.20.0.241
+#     }
+#
+# The corosync configuration is the one place that has BOTH the name and
+# the address of every member. /etc/hosts only has the local node, and
+# 'pvecm status' prints the addresses but not the names.
 #
 # Usage:
 #   ex-members.sh <command>
@@ -34,33 +46,71 @@ if [ "${NAMES_ONLY}" -eq 0 ] && [ -z "${CMD}" ]; then
 fi
 
 LOCAL="$(hostname)"
+COROSYNC="/etc/corosync/corosync.conf"
 
-# The node name -> address mapping from /etc/hosts.
-while read -r ip rest; do
-    case "${ip}" in
-        ''|'#'*) continue ;;
-    esac
-    # The names are the fields that look like a node name.
-    for name in ${rest}; do
-        case "${name}" in
-            pve[0-9]*) ;;
-            *) continue ;;
-        esac
-        [ "${name}" = "${LOCAL}" ] && continue
-        printf '%s %s\n' "${name}" "${ip}"
-    done
-done < /etc/hosts | sort -u | while read -r name ip; do
+# ---------------------------------------------------------------------------
+# Read the members out of the corosync configuration.
+#
+# The configuration looks like this:
+#
+#     node {
+#       name: pve2
+#       nodeid: 2
+#       quorum_votes: 1
+#       ring0_addr: 10.20.0.241
+#     }
+#
+# The name and the address are two lines of the same block, so the awk
+# collects them together and prints them when the block ends.
+# ---------------------------------------------------------------------------
+members() {
+    if [ -r "${COROSYNC}" ]; then
+        awk '
+            /^[ \t]*node[[:space:]]*\{/ { name=""; addr=""; innode=1; next }
+            /^[ \t]*\}/ {
+                if (innode && name != "" && addr != "") print name, addr
+                innode=0; name=""; addr=""
+                next
+            }
+            innode && /name:/ { gsub(/^[ \t]*name:[ \t]*/, ""); gsub(/[ \t]+$/, ""); name=$0; next }
+            innode && /ring0_addr:/ { gsub(/^[ \t]*ring0_addr:[ \t]*/, ""); gsub(/[ \t]+$/, ""); addr=$0; next }
+        ' "${COROSYNC}"
+        return
+    fi
+
+    # The fallback: /etc/hosts. On a node that is not clustered yet this
+    # is the only place the names are.
+    if [ -r /etc/hosts ]; then
+        awk '
+            /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {
+                addr=$1
+                for (i=2; i<=NF; i++) {
+                    if ($i ~ /^pve[0-9]+$/) print $i, addr
+                }
+            }
+        ' /etc/hosts
+    fi
+}
+
+while read -r name addr; do
+    [ -n "${name}" ] || continue
+    [ -n "${addr}" ] || continue
+    [ "${name}" = "${LOCAL}" ] && continue
+
     if [ "${NAMES_ONLY}" -eq 1 ]; then
         echo "${name}"
         continue
     fi
+
     echo "--- ${name} ---"
-    ssh -o StrictHostKeyChecking=no \
+    # The '-n' is important: without it ssh reads from the standard
+    # input and swallows the rest of the member list.
+    ssh -n -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null \
         -o LogLevel=ERROR \
         -o BatchMode=yes \
         -o ConnectTimeout=5 \
-        "root@${ip}" "${CMD}" 2>/dev/null
-done
+        "root@${addr}" "${CMD}" 2>/dev/null
+done < <(members)
 
 exit 0

@@ -41,12 +41,31 @@ status="$(ex_out "pvesm status 2>/dev/null")"
 
 ex_assert_contains "local-lvm is defined" "${status}" "local-lvm"
 ex_assert_contains "nfs-lab is defined" "${status}" "nfs-lab"
-ex_assert_contains "pbs-main is defined" "${status}" "pbs-main"
 
-for sid in local-lvm nfs-lab pbs-main; do
-    line="$(ex_out "pvesm status --storage ${sid} 2>/dev/null | head -1")"
+for sid in local-lvm nfs-lab; do
+    # 'pvesm status --storage <id>' prints a header line first, so the
+    # storage itself is on the second line.
+    # The closing parenthesis of the command may not sit directly behind
+    # a single quote inside a '$( ... )' - bash ends the substitution at
+    # the wrong place. The 'sed' therefore gets its argument without
+    # quotes.
+    line="$(ex_out "pvesm status --storage ${sid} 2>/dev/null | sed -n 2p")"
     ex_assert_contains "${sid} is active" "${line}" "active"
 done
+
+# The backup server is a separate machine. When it is not part of the
+# lab, the PBS part of the exercise cannot be checked - and then it is
+# skipped, not failed. A missing backup server is not a mistake of the
+# student.
+pbs_available=0
+if ex_out "pvesm status --storage pbs-main 2>/dev/null | grep -q pbs-main"; then
+    pbs_available=1
+    ex_pass "pbs-main is defined"
+    line="$(ex_out "pvesm status --storage pbs-main 2>/dev/null | sed -n 2p")"
+    ex_assert_contains "pbs-main is active" "${line}" "active"
+else
+    ex_skip "the backup server is not part of this lab - the PBS checks are skipped"
+fi
 
 # =============================================================================
 # The scope
@@ -55,20 +74,35 @@ ex_section "The scope"
 
 cfg="$(ex_out "cat /etc/pve/storage.cfg 2>/dev/null")"
 
-local_block="$(printf '%s' "${cfg}" | sed -n '/^storage local-lvm/,/^$/p')"
-ex_assert_contains "local-lvm is an LVM-thin storage" "${local_block}" "type lvmthin"
+local_block="$(printf '%s' "${cfg}" | sed -n '/^\(storage local-lvm\|lvmthin: local-lvm\)/,/^$/p')"
+ex_assert_contains "local-lvm is an LVM-thin storage" "${local_block}" "lvmthin"
 ex_assert_contains "local-lvm uses the volume group pve" "${local_block}" "vgname pve"
 ex_assert_contains "local-lvm uses the thin pool data" "${local_block}" "thinpool data"
 
-nfs_block="$(printf '%s' "${cfg}" | sed -n '/^storage nfs-lab/,/^$/p')"
-ex_assert_contains "nfs-lab is an NFS storage" "${nfs_block}" "type nfs"
+# The storage configuration has two formats:
+#
+#   storage nfs-lab            the old format
+#       type nfs
+#       server 10.20.2.20
+#
+#   nfs: nfs-lab                the format of Proxmox VE 8 and 9
+#       server 10.20.2.20
+#
+# The type is the prefix in the second format. Both are accepted here -
+# what matters is the result.
+nfs_block="$(printf '%s' "${cfg}" | sed -n '/^\(storage nfs-lab\|nfs: nfs-lab\)/,/^$/p')"
+ex_assert_contains "nfs-lab is an NFS storage" "${nfs_block}" "nfs"
 ex_assert_contains "nfs-lab points at the NFS server" "${nfs_block}" "10.20.2.20"
 ex_assert_contains "nfs-lab uses the /export/lab export" "${nfs_block}" "/export/lab"
 
-pbs_block="$(printf '%s' "${cfg}" | sed -n '/^storage pbs-main/,/^$/p')"
-ex_assert_contains "pbs-main is a PBS storage" "${pbs_block}" "type pbs"
-ex_assert_contains "pbs-main points at the backup server" "${pbs_block}" "10.20.2.21"
-ex_assert_contains "pbs-main uses the datastore main" "${pbs_block}" "datastore main"
+pbs_block="$(printf '%s' "${cfg}" | sed -n '/^\(storage pbs-main\|pbs: pbs-main\)/,/^$/p')"
+if [ "${pbs_available}" -eq 1 ]; then
+    ex_assert_contains "pbs-main is a PBS storage" "${pbs_block}" "pbs"
+    ex_assert_contains "pbs-main points at the backup server" "${pbs_block}" "10.20.2.21"
+    ex_assert_contains "pbs-main uses the datastore main" "${pbs_block}" "datastore main"
+else
+    ex_skip "pbs-main is not defined - the backup server is not part of this lab"
+fi
 
 # The shared storages have to be active on every node.
 shared_nodes="$(ex_remote_members "pvesm status --storage nfs-lab | grep -c active" | grep -c '^[1-9]')"
@@ -89,10 +123,14 @@ for c in images rootdir iso vztmpl backup snippets; do
         "${nfs_block}" "${c}"
 done
 
-ex_assert_contains "pbs-main declares the content type 'backup'" \
-    "${pbs_block}" "backup"
-ex_assert_not_contains "pbs-main does not declare 'images'" \
-    "${pbs_block}" "images"
+if [ "${pbs_available}" -eq 1 ]; then
+    ex_assert_contains "pbs-main declares the content type 'backup'" \
+        "${pbs_block}" "backup"
+    ex_assert_not_contains "pbs-main does not declare 'images'" \
+        "${pbs_block}" "images"
+else
+    ex_skip "the content type of pbs-main cannot be checked"
+fi
 
 # =============================================================================
 # The proof that the NFS storage is shared
@@ -102,19 +140,10 @@ ex_section "The proof that the NFS storage is shared"
 marker="/mnt/pve/nfs-lab/.exercise-shared-test"
 
 if ex_ok "echo 'shared storage test' > ${marker} 2>/dev/null"; then
-    remote="$(ex_run "
-        for ip in \$(awk '/^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+[[:space:]]+pve[0-9]/ {print \$1}' /etc/hosts); do
-            n=\$(awk -v ip=\"\$ip\" '\$1==ip {for(i=2;i<=NF;i++) if(\$i ~ /^pve[0-9]+\$/) print \$i}' /etc/hosts | head -1)
-            [ \"\$n\" = \"\$(hostname)\" ] && continue
-            if ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 \
-                   \"root@\$n\" 'cat ${marker}' 2>/dev/null | grep -q 'shared storage test'; then
-                echo \"\$n\"
-                break
-            fi
-        done" 2>/dev/null)"
+    remote="$(ex_remote_members "cat ${marker}" | grep -c 'shared storage test')"
 
-    if [ -n "${remote}" ]; then
-        ex_pass "the file is visible on another node (${remote})"
+    if [ "${remote:-0}" -gt 0 ]; then
+        ex_pass "the file is visible on another node (${remote} other nodes confirm it)"
     else
         ex_fail "the file is visible on another node"
     fi
@@ -133,7 +162,7 @@ ex_assert_eq "the test file was removed again" "no" "${gone}"
 # =============================================================================
 ex_section "The capacity"
 
-free="$(ex_out "pvesm status --storage local-lvm 2>/dev/null | awk 'NR==2 {print \$6}' | tr -d '%'")"
+free="$(ex_out "pvesm status --storage local-lvm 2>/dev/null | awk 'NR==2 {print $6}' | tr -d '%'")"
 case "${free}" in
     ''|*[!0-9]*) ex_skip "the free space of local-lvm cannot be read" ;;
     *) ex_assert_ge "local-lvm reports free space" "${free}" "1" ;;

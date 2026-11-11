@@ -103,9 +103,8 @@ def split_top(text, sep):
     return parts
 
 
-SELECT_RE = re.compile(
-    r"select\(\s*\.(\w+)\s*(==|>=|<=|>|<|!=)\s*([^\s)]+)\s*"
-    r"(?:\s+and\s+\.(\w+)\s*(==|>=|<=|>|<|!=)\s*([^\s)]+)\s*)?\)"
+COND_RE = re.compile(
+    r"\.(\w+)\s*(==|>=|<=|>|<|!=)\s*([^\s)]+)"
 )
 
 
@@ -164,19 +163,57 @@ def compare(value, operator, literal):
 
 
 def eval_select(item, expression):
-    match = SELECT_RE.search(expression)
-    if not match:
+    """Evaluate a jq 'select(...)' expression against one item.
+
+    The expression is a list of conditions, joined with 'and' or 'or'.
+    'and' binds stronger than 'or', like it does in jq.
+    """
+    inner = expression.strip()
+    if inner.startswith("select("):
+        inner = inner[len("select(") :]
+    if inner.endswith(")"):
+        inner = inner[:-1]
+
+    # Split the conditions at the 'and' / 'or' keywords.
+    tokens = re.split(r"(\s+and\s+|\s+or\s+)", inner)
+    conditions = []
+    operators = []
+    for token in tokens:
+        stripped = token.strip()
+        if not stripped:
+            continue
+        if stripped in ("and", "or"):
+            operators.append(stripped)
+            continue
+        conditions.append(stripped)
+
+    # Build the groups: 'a and b or c' is '(a and b) or c'.
+    groups = []
+    current = []
+    for index, condition in enumerate(conditions):
+        current.append(condition)
+        if index < len(operators) and operators[index] == "or":
+            groups.append(("and", list(current)))
+            current = []
+    if current:
+        groups.append(("and", list(current)))
+    if not groups:
         return True
-    field, operator, literal = match.group(1), match.group(2), match.group(3)
-    if not compare(get_field(item, field), operator, literal_value(literal)):
-        return False
-    # The optional second condition.
-    if match.group(4):
-        field2 = match.group(4)
-        operator2 = match.group(5)
-        literal2 = match.group(6)
-        return compare(get_field(item, field2), operator2, literal_value(literal2))
-    return True
+
+    # The groups are joined with 'or'.
+    for joiner, group in groups:
+        group_result = True
+        for condition in group:
+            match = COND_RE.search(condition)
+            if not match:
+                continue
+            field, operator, literal = match.group(1), match.group(2), match.group(3)
+            if not compare(get_field(item, field), operator, literal_value(literal)):
+                group_result = False
+                break
+        if group_result:
+            return True
+    return False
 
 
 def apply_field(doc, path):

@@ -73,7 +73,7 @@ done
 
 # A configured node.
 configured="$(ex_out "ha-manager status --output-format json 2>/dev/null \
-    | /opt/exercises/lib/ex-json.sh '[.[] | select(.type==\"vm\" or .type==\"ct\") | select(.status==\"started\") | .node] | length'")"
+    | /opt/exercises/lib/ex-json.sh '[.[] | select(.type == \"vm\" or .type == \"ct\") | select(.status == \"started\") | .node] | length'")"
 case "${configured}" in
     ''|*[!0-9]*) ex_skip "the configured nodes cannot be counted" ;;
     *)

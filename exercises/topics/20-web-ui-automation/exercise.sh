@@ -41,20 +41,49 @@ esac
 # =============================================================================
 ex_section "The API"
 
-version="$(ex_out "curl -sk --max-time 10 https://localhost:8006/api2/json/version 2>/dev/null")"
-ex_assert_contains "the API answers on /api2/json/version" "${version}" "version"
+# The API needs an authentication token. An anonymous request answers
+# with HTTP 401 - which proves that the API is there and that it enforces
+# the authentication.
+api_code="$(ex_out "curl -sk -o /dev/null -w '%{http_code}' --max-time 10 \
+    https://localhost:8006/api2/json/version 2>/dev/null")"
+if [ "${api_code}" = "401" ] || [ "${api_code}" = "200" ]; then
+    ex_pass "the API answers on /api2/json/version (HTTP ${api_code})"
+else
+    ex_fail "the API answers on /api2/json/version (HTTP ${api_code})"
+fi
 
-resources="$(ex_out "curl -sk --max-time 10 https://localhost:8006/api2/json/cluster/resources 2>/dev/null")"
-ex_assert_contains "the API answers on /api2/json/cluster/resources" "${resources}" "data"
+# The token is what makes the API usable. When it is not set, the checks
+# that need it are skipped.
+TOKEN="${PROXMOX_TOKEN:-${PVE_TOKEN:-}}"
 
-status="$(ex_out "curl -sk --max-time 10 https://localhost:8006/api2/json/cluster/status 2>/dev/null")"
-ex_assert_contains "the API answers on /api2/json/cluster/status" "${status}" "data"
+if [ -n "${TOKEN}" ]; then
+    version="$(ex_out "curl -sk --max-time 10 \
+        -H 'Authorization: PVEAPIToken=${TOKEN}' \
+        https://localhost:8006/api2/json/version 2>/dev/null")"
+    ex_assert_contains "the API answers on /api2/json/version" "${version}" "version"
 
-# pvesh and the raw API have to agree.
-pvesh_count="$(ex_out "pvesh get /cluster/resources --output-format json 2>/dev/null | /opt/exercises/lib/ex-json.sh 'length'")"
-api_count="$(ex_out "curl -sk --max-time 10 https://localhost:8006/api2/json/cluster/resources 2>/dev/null | /opt/exercises/lib/ex-json.sh '.data | length'")"
-ex_assert_not_empty "pvesh returns the resources" "${pvesh_count}"
-ex_assert_eq "pvesh and the raw API agree" "${pvesh_count}" "${api_count}"
+    resources="$(ex_out "curl -sk --max-time 10 \
+        -H 'Authorization: PVEAPIToken=${TOKEN}' \
+        https://localhost:8006/api2/json/cluster/resources 2>/dev/null")"
+    ex_assert_contains "the API answers on /api2/json/cluster/resources" "${resources}" "data"
+
+    status="$(ex_out "curl -sk --max-time 10 \
+        -H 'Authorization: PVEAPIToken=${TOKEN}' \
+        https://localhost:8006/api2/json/cluster/status 2>/dev/null")"
+    ex_assert_contains "the API answers on /api2/json/cluster/status" "${status}" "data"
+
+    # pvesh and the raw API have to agree.
+    pvesh_count="$(ex_out "pvesh get /cluster/resources --output-format json 2>/dev/null \
+        | /opt/exercises/lib/ex-json.sh 'length'")"
+    api_count="$(ex_out "curl -sk --max-time 10 \
+        -H 'Authorization: PVEAPIToken=${TOKEN}' \
+        https://localhost:8006/api2/json/cluster/resources 2>/dev/null \
+        | /opt/exercises/lib/ex-json.sh '.data | length'")"
+    ex_assert_not_empty "pvesh returns the resources" "${pvesh_count}"
+    ex_assert_eq "pvesh and the raw API agree" "${pvesh_count}" "${api_count}"
+else
+    ex_skip "the API checks with a token - export PROXMOX_TOKEN to run them"
+fi
 
 # =============================================================================
 # The token
@@ -65,7 +94,7 @@ tokens="$(ex_out "pveum user token list automation@pve 2>/dev/null")"
 ex_assert_contains "the token automation@pve!terraform exists" "${tokens}" "terraform"
 
 privsep="$(ex_out "pveum user token list automation@pve --output-format json 2>/dev/null \
-    | /opt/exercises/lib/ex-json.sh '.[] | select(.tokenid==\"terraform\") | .privsep'")"
+    | /opt/exercises/lib/ex-json.sh '.[] | select(.tokenid == \"terraform\") | .privsep'")"
 ex_assert_eq "the token has privilege separation enabled" "1" "${privsep}"
 
 token_acl="$(ex_out "pveum acl list 2>/dev/null | grep 'automation@pve!terraform'")"
@@ -80,8 +109,6 @@ ex_assert_empty "the token is not granted on the root path" "${token_root}"
 # The token's reach
 # =============================================================================
 ex_section "The token's reach"
-
-TOKEN="${PROXMOX_TOKEN:-${PVE_TOKEN:-}}"
 
 if [ -n "${TOKEN}" ]; then
     # The token can read the cluster resources.

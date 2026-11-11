@@ -37,15 +37,19 @@ esac
 # =============================================================================
 ex_section "The repository"
 
-sources="$(ex_out "ls /etc/apt/sources.list.d/ 2>/dev/null")"
+# The file name is not fixed - the Proxmox installer writes
+# 'pve-install-repo.sources', a hand-made configuration often calls it
+# 'pve-no-subscription.sources'. The CONTENT is what matters.
+repo_content="$(ex_out "cat /etc/apt/sources.list.d/pve-* 2>/dev/null")"
+
 ex_assert_contains "the no-subscription repository is configured" \
-    "${sources}" "pve-no-subscription"
+    "${repo_content}" "pve-no-subscription"
 ex_assert_not_contains "the enterprise repository is removed" \
-    "${sources}" "pve-enterprise"
+    "${repo_content}" "pve-enterprise"
 
 # The pvetest repository must never be on a production node.
 ex_assert_not_contains "the pvetest repository is not configured" \
-    "${sources}" "pvetest"
+    "${repo_content}" "pvetest"
 
 # =============================================================================
 # The state
@@ -85,8 +89,15 @@ fi
 # =============================================================================
 ex_section "The maintenance procedure"
 
-ha_state="$(ex_out "systemctl is-active pve-ha 2>/dev/null")"
-ex_assert_eq "the pve-ha service is running" "active" "${ha_state}"
+# The HA manager comes with the 'proxmox-ha' package. On a node without
+# HA resources it is not installed at all, and then it is skipped -
+# a missing HA manager is not a maintenance mistake.
+if ex_out "systemctl list-unit-files pve-ha.service 2>/dev/null | grep -q pve-ha"; then
+    ha_state="$(ex_out "systemctl is-active pve-ha 2>/dev/null")"
+    ex_assert_eq "the pve-ha service is running" "active" "${ha_state}"
+else
+    ex_skip "the HA manager is not installed on this node"
+fi
 
 managed="$(ex_out "ha-manager status 2>/dev/null")"
 ex_assert_not_empty "the HA status is readable" "${managed}"

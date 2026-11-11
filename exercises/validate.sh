@@ -108,8 +108,12 @@ while IFS= read -r script; do
     # The second trap: a closing parenthesis INSIDE the quoted argument of a
     # command substitution. 'x="$(ex_out "cmd grep '^x:')"' ends the
     # substitution at the ')' inside the quotes.
-    if grep -qE '\$\(ex_(out|run) "[^"]*\)"$' "${script}"; then
-        badlines="$(grep -nE '\$\(ex_(out|run) "[^"]*\)"$' "${script}" | cut -d: -f1 | tr '\n' ' ')"
+    #
+    # The dangerous form is a single quote directly in front of the ')':
+    # the quote flips the quote state, so the shell does not see the
+    # closing parenthesis of the substitution.
+    if grep -qE "\\\$\(ex_(out|run|ok) \"[^\"]*'\)" "${script}"; then
+        badlines="$(grep -nE "\\\$\(ex_(out|run|ok) \"[^\"]*'\)" "${script}" | cut -d: -f1 | tr '\n' ' ')"
         fail "${name} closes a substitution inside the quoted argument (lines ${badlines}) - move the ')' outside the quotes"
     else
         pass "${name} avoids the closed-substitution trap"

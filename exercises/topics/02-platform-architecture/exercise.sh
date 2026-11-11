@@ -139,7 +139,7 @@ cluster_ids="$(ex_out "pvesh get /cluster/resources --type vm --output-format js
     | python3 -c \"import json,sys
 d=json.load(sys.stdin)
 print(' '.join(str(v['vmid']) for v in d))\" 2>/dev/null")"
-local_ids="$(ex_out "qm list 2>/dev/null | tail -n +2 | grep -E '^ *[0-9]+' | awk '{print \$1}' | tr '\n' ' '")"
+local_ids="$(ex_out "qm list 2>/dev/null | tail -n +2 | grep -E '^ *[0-9]+' | cut -d' ' -f1 | tr '\n' ' '")"
 missing=""
 for id in ${local_ids}; do
     case " ${cluster_ids} " in
@@ -183,7 +183,7 @@ ex_section "The QEMU process"
 
 running="$(ex_out "qm list 2>/dev/null | grep -c 'running'")"
 if [ "${running:-0}" -gt 0 ]; then
-    vmid="$(ex_out "qm list 2>/dev/null | awk '/running/ {print \$1; exit}'")"
+    vmid="$(ex_out "qm list 2>/dev/null | awk '/running/ {print $1; exit}'")"
     # Proxmox 9 does not start 'qemu-system-x86_64' directly, it starts
     # the wrapper '/usr/bin/kvm'. Both spellings are accepted.
     showcmd="$(ex_out "qm showcmd ${vmid} 2>/dev/null | head -1")"
