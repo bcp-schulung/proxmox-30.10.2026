@@ -55,6 +55,22 @@ qm shutdown 9201 --timeout 60     # wait up to 60 seconds
 qm shutdown 9201 --forceStop 1    # cut the power after the timeout
 ```
 
+### The guests of this lab are bare
+
+The guests in the lab are clones of the stock Debian cloud image, and that
+image ships **no configuration of its own**. There is no cloud-init drive,
+no network configuration and no guest agent - so the guest boots to a
+`localhost` login prompt, and `qm shutdown` on it never completes:
+
+```bash
+qm shutdown 9201 --timeout 60     # times out, the guest has no agent
+qm stop 9201                      # the only thing that works
+```
+
+That is the topic. The difference between the two commands is only visible
+on a guest that has the agent, and the agent only comes up once the guest
+has a cloud-init drive of its own - which is the next step of the exercise.
+
 ## 3. The configuration areas
 
 | Setting | Options | Notes |

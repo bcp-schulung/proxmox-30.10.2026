@@ -49,7 +49,11 @@ if [ -n "${addr}" ]; then
     prefix="${addr#*/}"
     network="$(ex_out "ip route show dev vmbr0 scope link 2>/dev/null | cut -d' ' -f1 | head -1")"
     if [ -n "${network}" ]; then
-        expected_gw="${network%/*}"1
+        # The gateway is the network address with the host part set to 1.
+        # The network address is '10.10.10.0/24', so the '0' has to be
+        # REPLACED - appending to it would give '10.10.10.01'.
+        expected_gw="${network%/*}"
+        expected_gw="${expected_gw%0}1"
         actual_gw="${addr%%/*}"
         ex_assert_eq "the bridge address is the gateway of ${network}" \
             "${expected_gw}" "${actual_gw}"
@@ -87,9 +91,14 @@ ex_assert_contains "the DHCP options hand out the router" "${conf}" "option:rout
 ex_assert_contains "the DHCP options hand out the DNS server" "${conf}" "option:dns-server"
 
 # The range has to be inside the bridge's own subnet.
-range="$(ex_out "grep -h dhcp-range /etc/dnsmasq.d/*.conf 2>/dev/null | head -1")"
+#
+# The comment lines of the configuration have to be skipped: one of them
+# mentions 'dhcp-range' in a sentence about why the netmask is written
+# in the dotted form, and a plain 'head -1' would pick up that sentence
+# instead of the setting.
+range="$(ex_out "grep -h '^dhcp-range=' /etc/dnsmasq.d/*.conf 2>/dev/null | head -1")"
 if [ -n "${range}" ]; then
-    range_start="$(printf '%s' "${range}" | sed -n 's/.*dhcp-range=\([0-9.]*\).*/\1/p')"
+    range_start="$(printf '%s' "${range}" | sed -n 's/^dhcp-range=\([0-9.]*\).*/\1/p')"
     if [ -n "${range_start}" ] && [ -n "${addr}" ]; then
         bridge_ip="${addr%%/*}"
         case "${range_start}" in

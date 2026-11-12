@@ -9,7 +9,7 @@
 ## 1. Clone the template
 
 ```bash
-qm clone 9101 9201 --name debian13-run-pve1 --full --storage nfs-lab
+qm clone 9101 9201 --name debian13-run-pve1 --full --storage local-lvm
 ```
 
 `--full` is the default, but write it explicitly - the difference between a
@@ -20,10 +20,10 @@ Verify:
 
 ```bash
 qm config 9201 | grep scsi0
-# scsi0: nfs-lab:vm-9201-disk-0,size=32G
+# scsi0: local-lvm:vm-9201-disk-1,size=3G
 ```
 
-A linked clone would show `base-9101-disk-0` here.
+A linked clone would show `base-9101-disk-1` here.
 
 ## 2. Configure it
 
@@ -35,7 +35,7 @@ qm set 9201 \
   --memory 4096 \
   --net0 virtio,bridge=vmbr0,tag=20 \
   --scsihw virtio-scsi-single \
-  --scsi0 nfs-lab:vm-9201-disk-0,discard=on,iothread=1 \
+  --scsi0 local-lvm:vm-9201-disk-1,discard=on,iothread=1 \
   --agent "enabled=1,fstrim_cloned_disks=1" \
   --machine q35 \
   --bios ovmf \
@@ -195,13 +195,13 @@ qm guest cmd 9201 ping
 
 ```bash
 # The clone
-qm clone 9101 9201 --name debian13-run-pve1 --full --storage nfs-lab
+qm clone 9101 9201 --name debian13-run-pve1 --full --storage local-lvm
 
 # The configuration
 qm set 9201 --cores 2 --sockets 1 --memory 4096 \
   --net0 virtio,bridge=vmbr0,tag=20 \
   --scsihw virtio-scsi-single \
-  --scsi0 nfs-lab:vm-9201-disk-0,discard=on,iothread=1 \
+  --scsi0 local-lvm:vm-9201-disk-1,discard=on,iothread=1 \
   --agent "enabled=1,fstrim_cloned_disks=1" \
   --machine q35 --bios ovmf --onboot 1
 

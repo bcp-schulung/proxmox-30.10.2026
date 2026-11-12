@@ -2,6 +2,26 @@
 
 **Topic ID:** `06-identity-rbac`
 
+> **This topic is a hands-on exercise, not a verification of a pre-provisioned
+> state.** Unlike the other topics, the objects below do **not** exist on the
+> cluster when the seminar starts. The student creates them.
+>
+> The lab has no directory server, so the built-in `pve` realm type is used
+> under the deck's name `ad-corp`. The commands are identical to the ones in
+> the course material:
+>
+> ```bash
+> pveum realm add ad-corp --type pve
+> pveum user add jsmith@ad-corp
+> pveum role add VM-Operator -privs "VM.Console,VM.PowerMgmt,VM.Monitor"
+> pveum acl modify /vms/9201 --users jsmith@ad-corp --roles VM-Operator
+> pveum acl modify /vms/9202 --users jsmith@ad-corp --roles VM-Operator
+> pveum user token add automation@pve terraform --privsep 1
+> pveum acl modify /vms/9201 --tokens 'automation@pve!terraform' --roles VM-Operator
+> ```
+>
+> Run `./exercise.sh` after the student has done the work.
+
 ---
 
 ## The realm and the user

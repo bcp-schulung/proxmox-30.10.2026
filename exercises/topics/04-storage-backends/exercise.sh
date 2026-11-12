@@ -162,7 +162,7 @@ ex_assert_eq "the test file was removed again" "no" "${gone}"
 # =============================================================================
 ex_section "The capacity"
 
-free="$(ex_out "pvesm status --storage local-lvm 2>/dev/null | awk 'NR==2 {print $6}' | tr -d '%'")"
+free="$(ex_out "pvesm status --storage local-lvm 2>/dev/null | awk 'NR==2 {print \$6}' | tr -d '%'")"
 case "${free}" in
     ''|*[!0-9]*) ex_skip "the free space of local-lvm cannot be read" ;;
     *) ex_assert_ge "local-lvm reports free space" "${free}" "1" ;;

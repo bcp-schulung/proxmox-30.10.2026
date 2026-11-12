@@ -183,7 +183,7 @@ ex_section "The QEMU process"
 
 running="$(ex_out "qm list 2>/dev/null | grep -c 'running'")"
 if [ "${running:-0}" -gt 0 ]; then
-    vmid="$(ex_out "qm list 2>/dev/null | awk '/running/ {print $1; exit}'")"
+    vmid="$(ex_out "qm list 2>/dev/null | awk '/running/ {print \$1; exit}'")"
     # Proxmox 9 does not start 'qemu-system-x86_64' directly, it starts
     # the wrapper '/usr/bin/kvm'. Both spellings are accepted.
     showcmd="$(ex_out "qm showcmd ${vmid} 2>/dev/null | head -1")"

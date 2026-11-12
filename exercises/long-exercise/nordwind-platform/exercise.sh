@@ -205,7 +205,7 @@ check_task3_storage() {
 
     # Free space on the local pool.
     local free
-    free="$(ex_out "pvesm status --storage local-lvm 2>/dev/null | awk 'NR==2 {print $6}' | tr -d '%'")"
+    free="$(ex_out "pvesm status --storage local-lvm 2>/dev/null | awk 'NR==2 {print \$6}' | tr -d '%'")"
     if [ -n "${free}" ]; then
         ex_assert_ge "the local pool has free space" "${free}" "1"
     else
@@ -242,7 +242,10 @@ check_task4_network() {
     ex_assert_eq "the DHCP server is running" "active" "${dnsmasq}"
 
     local dhcp_range
-    dhcp_range="$(ex_out "grep -h dhcp-range /etc/dnsmasq.d/*.conf 2>/dev/null | head -1")"
+    # The comment lines have to be skipped: one of them mentions
+    # 'dhcp-range' in a sentence about the netmask, and a plain 'head -1'
+    # would pick up that sentence instead of the setting.
+    dhcp_range="$(ex_out "grep -h '^dhcp-range=' /etc/dnsmasq.d/*.conf 2>/dev/null | head -1")"
     ex_assert_contains "a DHCP range is configured on the bridge" "${dhcp_range}" "dhcp-range="
 
     # The nodes have to use different overlay subnets, otherwise the routing
@@ -277,7 +280,7 @@ check_task5_identity() {
 
     # The role has to be exactly the three privileges.
     local privs
-    privs="$(ex_out "pveum role list 2>/dev/null | awk '$2==\"VM-Operator\" {print $3}'")"
+    privs="$(ex_out "pveum role list 2>/dev/null | awk '\$2==\"VM-Operator\" {print \$3}'")"
     ex_assert_contains "the role VM-Operator exists" "${privs}" "VM.Console"
     ex_assert_contains "the role grants VM.PowerMgmt" "${privs}" "VM.PowerMgmt"
     ex_assert_contains "the role grants VM.Monitor" "${privs}" "VM.Monitor"
@@ -294,7 +297,7 @@ check_task5_identity() {
 
     # The ACL must not be on the root path with the broad role.
     local root_acl
-    root_acl="$(ex_out "pveum acl list 2>/dev/null | awk '$1==\"/\" {print}'")"
+    root_acl="$(ex_out "pveum acl list 2>/dev/null | awk '\$1==\"/\" {print}'")"
     ex_assert_not_contains "no broad ACL on the root path" "${root_acl}" "PVEAdmin"
 
     # The effective permissions.

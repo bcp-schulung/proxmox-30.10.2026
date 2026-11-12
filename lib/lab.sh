@@ -1370,10 +1370,23 @@ lab_phase_security() {
     pve_security_realm "${first_priv}" "${SEC_REALM}"
     pve_security_user "${first_priv}" "${SEC_USER}" "${user_password}"
     pve_security_role "${first_priv}" "${SEC_ROLE}" "${SEC_ROLE_PRIVS}"
+
+    # The operator gets the role on the guests of the first two nodes. The
+    # third guest is the test environment and stays out of it - the
+    # exercise checks that the role is scoped to the web tier.
     pve_security_acl "${first_priv}" "/vms/${VM_WEB_ID}" "${SEC_USER}" "${SEC_ROLE}"
+    pve_security_acl "${first_priv}" "/vms/${VM_CLONE_FULL_ID}" "${SEC_USER}" "${SEC_ROLE}"
 
     pve_security_token "${first_priv}" "${SEC_TOKEN_USER}" "${SEC_TOKEN_NAME}"
-    pve_security_token_acl "${first_priv}" "${SEC_TOKEN_PATH}" "${SEC_TOKEN_USER}!${SEC_TOKEN_NAME}" "${SEC_ROLE}"
+
+    # The token is scoped to one guest. SEC_TOKEN_PATH names the path, but
+    # it follows the inventory - a path with a hard-coded VMID in it drifts
+    # away from the guest it belongs to the moment the inventory changes.
+    local token_path="${SEC_TOKEN_PATH}"
+    case "${token_path}" in
+        *"/vms/"*) token_path="/vms/${VM_WEB_ID}" ;;
+    esac
+    pve_security_token_acl "${first_priv}" "${token_path}" "${SEC_TOKEN_USER}!${SEC_TOKEN_NAME}" "${SEC_ROLE}"
 
     # shellcheck disable=SC2046  # the node list is intentionally split into words
     pve_security_acme_selfsigned "${first_priv}" $(lab_node_list)

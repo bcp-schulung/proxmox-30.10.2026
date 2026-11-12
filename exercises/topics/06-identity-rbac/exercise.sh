@@ -34,6 +34,10 @@ esac
 
 # =============================================================================
 # The realm and the user
+#
+# NOTE: this topic is a hands-on exercise. The objects below are NOT
+# pre-provisioned on the cluster - the student creates them. This script
+# verifies the work, it does not check a starting state.
 # =============================================================================
 ex_section "The realm and the user"
 
