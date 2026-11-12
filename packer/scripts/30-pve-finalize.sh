@@ -120,6 +120,7 @@ echo "the passwordless sudo rule for admin is in place"
 # -----------------------------------------------------------------------------
 install -m 0755 "${PACKER_SCRIPTS_DIR:-/opt/lab-build}/lab-network.sh" /usr/local/sbin/lab-network.sh
 install -m 0755 "${PACKER_SCRIPTS_DIR:-/opt/lab-build}/lab-netcheck.sh" /usr/local/sbin/lab-netcheck.sh
+install -m 0755 "${PACKER_SCRIPTS_DIR:-/opt/lab-build}/lab-detached.sh" /usr/local/sbin/lab-detached
 install -m 0755 "${PACKER_SCRIPTS_DIR:-/opt/lab-build}/lab-firewall.sh" /usr/local/sbin/lab-firewall.sh
 
 cat > /etc/systemd/system/lab-network.service << 'UNIT_EOF'

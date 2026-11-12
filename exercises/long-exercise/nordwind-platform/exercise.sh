@@ -288,7 +288,7 @@ check_task5_identity() {
     # The ACL is on the guests, not on the root.
     local acl
     acl="$(ex_out "pveum acl list 2>/dev/null")"
-    ex_assert_contains "the ACL grants the role on /vms/100" "${acl}" "/vms/100"
+    ex_assert_contains "the ACL grants the role on /vms/9201" "${acl}" "/vms/9201"
     ex_assert_contains "the ACL grants the role to jsmith" "${acl}" "jsmith@ad-corp"
     ex_assert_contains "the ACL grants the role to the VM-Operator role" "${acl}" "VM-Operator"
 
@@ -316,7 +316,7 @@ check_task5_identity() {
     local token_acl
     token_acl="$(ex_out "pveum acl list 2>/dev/null | grep 'automation@pve!terraform'")"
     ex_assert_not_empty "the token has its own ACL entry" "${token_acl}"
-    ex_assert_contains "the token ACL is scoped to /vms/100" "${token_acl}" "/vms/100"
+    ex_assert_contains "the token ACL is scoped to /vms/9201" "${token_acl}" "/vms/9201"
 }
 
 # =============================================================================
@@ -326,16 +326,16 @@ check_task6_template() {
     ex_section "Task 6 - The golden image and the template"
 
     local cfg
-    cfg="$(ex_vm_config 9000)"
+    cfg="$(ex_vm_config 9101)"
 
-    ex_assert_not_empty "VM 9000 exists" "${cfg}"
-    ex_assert_contains "VM 9000 is named debian13-template" "${cfg}" "debian13-template"
+    ex_assert_not_empty "VM 9101 exists" "${cfg}"
+    ex_assert_contains "VM 9101 is named debian13-tpl-pve1" "${cfg}" "debian13-tpl-pve1"
 
     # A template cannot be started - 'qm status' reports it as stopped and
     # 'qm template' set the template flag in the configuration.
     local is_template
-    is_template="$(ex_out "qm config 9000 2>/dev/null | grep -c '^template:'")"
-    ex_assert_ge "VM 9000 is a template" "${is_template}" "1"
+    is_template="$(ex_out "qm config 9101 2>/dev/null | grep -c '^template:'")"
+    ex_assert_ge "VM 9101 is a template" "${is_template}" "1"
 
     ex_assert_contains "the template has a cloud-init drive" "${cfg}" "cloudinit"
     ex_assert_contains "the template uses virtio-scsi-single" "${cfg}" "virtio-scsi-single"
@@ -343,8 +343,8 @@ check_task6_template() {
 
     # The storage.
     local disk
-    disk="$(ex_out "qm config 9000 2>/dev/null | grep '^scsi0:'")"
-    ex_assert_contains "the template is on the shared storage" "${disk}" "nfs-lab"
+    disk="$(ex_out "qm config 9101 2>/dev/null | grep '^scsi0:'")"
+    ex_assert_contains "the template is on the local LVM-thin storage" "${disk}" "local-lvm"
 
     # The agent answered while the template was running before it was
     # converted. The check is informational - a template cannot run.
@@ -358,7 +358,7 @@ check_task7_web_tier() {
     ex_section "Task 7 - The web tier"
 
     local id
-    for id in 100 101; do
+    for id in 9201 9202; do
         local cfg status
         cfg="$(ex_vm_config "${id}")"
         ex_assert_not_empty "VM ${id} exists" "${cfg}"
@@ -390,7 +390,7 @@ check_task7_web_tier() {
         local scsi
         scsi="$(ex_out "qm config ${id} 2>/dev/null | grep '^scsi0:'")"
         ex_assert_contains "VM ${id} uses virtio-scsi-single" "${cfg}" "virtio-scsi-single"
-        ex_assert_contains "VM ${id} is on the shared storage" "${scsi}" "nfs-lab"
+        ex_assert_contains "VM ${id} is on the local LVM-thin storage" "${scsi}" "local-lvm"
         ex_assert_contains "VM ${id} has discard enabled" "${scsi}" "discard=on"
 
         # The agent.
@@ -411,9 +411,9 @@ check_task7_web_tier() {
     # The clones have to be full clones - a linked clone refers to the base
     # disk of the template.
     local disk100
-    disk100="$(ex_out "qm config 100 2>/dev/null | grep '^scsi0:'")"
-    ex_assert_not_contains "VM 100 is a full clone, not a linked one" \
-        "${disk100}" "base-9000"
+    disk100="$(ex_out "qm config 9201 2>/dev/null | grep '^scsi0:'")"
+    ex_assert_not_contains "VM 9201 is a full clone, not a linked one" \
+        "${disk100}" "base-9101"
 }
 
 # =============================================================================
@@ -482,33 +482,36 @@ check_task9_clones() {
     ex_section "Task 9 - Clones and test environments"
 
     local cfg
-    cfg="$(ex_vm_config 102)"
-    ex_assert_not_empty "VM 102 exists" "${cfg}"
+    cfg="$(ex_vm_config 9203)"
+    ex_assert_not_empty "VM 9203 exists" "${cfg}"
 
     local name
-    name="$(ex_out "qm config 102 2>/dev/null | grep '^name:' | cut -d' ' -f2")"
-    ex_assert_eq "VM 102 is named web-test" "web-test" "${name}"
+    name="$(ex_out "qm config 9203 2>/dev/null | grep '^name:' | cut -d' ' -f2")"
+    ex_assert_eq "VM 9203 is named debian13-run-pve3" "debian13-run-pve3" "${name}"
 
-    # A linked clone refers to the base disk of the template.
+    # A full clone has a disk of its own. A linked clone would refer to
+    # the base disk of the template instead ('base-9101-disk-N').
     local disk
-    disk="$(ex_out "qm config 102 2>/dev/null | grep '^scsi0:'")"
-    ex_assert_contains "VM 102 is a linked clone of the template" "${disk}" "base-9000"
+    disk="$(ex_out "qm config 9203 2>/dev/null | grep '^scsi0:'")"
+    ex_assert_not_contains "VM 9203 is a full clone, not a linked one" "${disk}" "base-9101"
+    ex_assert_contains "VM 9203 has a disk of its own" "${disk}" "vm-9203-disk"
 
-    # The template must still exist - a linked clone depends on it.
+    # The template of the node must still exist - it is the source of
+    # the clone, and the guests are made from it.
     local tpl
-    tpl="$(ex_vm_config 9000)"
-    ex_assert_not_empty "the base template 9000 still exists" "${tpl}"
+    tpl="$(ex_vm_config 9101)"
+    ex_assert_not_empty "the base template 9101 still exists" "${tpl}"
 
     local tpl_flag
-    tpl_flag="$(ex_out "qm config 9000 2>/dev/null | grep -c '^template:'")"
+    tpl_flag="$(ex_out "qm config 9101 2>/dev/null | grep -c '^template:'")"
     ex_assert_ge "the base template is still a template" "${tpl_flag}" "1"
 
     # Its own cloud-init drive.
-    ex_assert_contains "VM 102 has a cloud-init drive" "${cfg}" "cloudinit"
+    ex_assert_contains "VM 9203 has a cloud-init drive" "${cfg}" "cloudinit"
 
     local disk102
-    disk102="$(ex_out "qm config 102 2>/dev/null | grep '^scsi0:'")"
-    ex_assert_contains "VM 102 is on the shared storage" "${disk102}" "nfs-lab"
+    disk102="$(ex_out "qm config 9203 2>/dev/null | grep '^scsi0:'")"
+    ex_assert_contains "VM 9203 is on the local LVM-thin storage" "${disk102}" "local-lvm"
 }
 
 # =============================================================================
@@ -518,18 +521,18 @@ check_task10_snapshots() {
     ex_section "Task 10 - Snapshots and rollback"
 
     local snaps
-    snaps="$(ex_out "qm listsnapshot 100 2>/dev/null")"
-    ex_assert_contains "VM 100 has a snapshot named pre-update" "${snaps}" "pre-update"
+    snaps="$(ex_out "qm listsnapshot 9201 2>/dev/null")"
+    ex_assert_contains "VM 9201 has a snapshot named pre-update" "${snaps}" "pre-update"
 
     local desc
-    desc="$(ex_out "qm listsnapshot 100 2>/dev/null | grep 'pre-update' | sed 's/.*pre-update[[:space:]]*//'")"
+    desc="$(ex_out "qm listsnapshot 9201 2>/dev/null | grep 'pre-update' | sed 's/.*pre-update[[:space:]]*//'")"
     ex_assert_not_empty "the snapshot carries a description" "${desc}"
 
     # The rollback must have removed the change that was made after the
     # snapshot was taken.
     local marker="/etc/nordwind-exercise-marker"
     local present
-    present="$(ex_out "qm guest exec 100 -- test -f ${marker} 2>/dev/null && echo yes || echo no")"
+    present="$(ex_out "qm guest exec 9201 -- test -f ${marker} 2>/dev/null && echo yes || echo no")"
     ex_assert_eq "the change made after the snapshot is gone after the rollback" \
         "no" "${present}"
 }
@@ -541,18 +544,18 @@ check_task11_migration() {
     ex_section "Task 11 - Live migration"
 
     local node disk status
-    node="$(ex_guest_node vm 100)"
-    ex_assert_eq "VM 100 runs on pve2 after the migration" "pve2" "${node}"
+    node="$(ex_guest_node vm 9201)"
+    ex_assert_eq "VM 9201 runs on pve2 after the migration" "pve2" "${node}"
 
     # The migration only works on shared storage.
-    disk="$(ex_out "qm config 100 2>/dev/null | grep '^scsi0:'")"
-    ex_assert_contains "VM 100 is on the shared storage" "${disk}" "nfs-lab"
+    disk="$(ex_out "qm config 9201 2>/dev/null | grep '^scsi0:'")"
+    ex_assert_contains "VM 9201 is on the local LVM-thin storage" "${disk}" "local-lvm"
 
-    status="$(ex_guest_status vm 100)"
-    ex_assert_eq "VM 100 is running" "running" "${status}"
+    status="$(ex_guest_status vm 9201)"
+    ex_assert_eq "VM 9201 is running" "running" "${status}"
 
     if [ "${status}" = "running" ]; then
-        if ex_ok "qm guest cmd 100 ping >/dev/null 2>&1"; then
+        if ex_ok "qm guest cmd 9201 ping >/dev/null 2>&1"; then
             ex_pass "the guest agent answers after the migration"
         else
             ex_fail "the guest agent answers after the migration"
@@ -582,7 +585,7 @@ check_task12_segmentation() {
 
     # The VLAN tags on the guests.
     local net
-    net="$(ex_out "qm config 100 2>/dev/null | grep '^net0:'")"
+    net="$(ex_out "qm config 9201 2>/dev/null | grep '^net0:'")"
     ex_assert_contains "the web tier carries VLAN 20" "${net}" "tag=20"
 
     local net300
@@ -600,12 +603,12 @@ check_task12_segmentation() {
 
     # The workloads have their own rules.
     local vmfw
-    vmfw="$(ex_out "cat /etc/pve/firewall/100.fw 2>/dev/null")"
+    vmfw="$(ex_out "cat /etc/pve/firewall/9201.fw 2>/dev/null")"
     ex_assert_not_empty "the web tier VM has its own firewall rules" "${vmfw}"
 
     # The rule that only allows web -> database.
     local dbrule
-    dbrule="$(ex_out "cat /etc/pve/firewall/100.fw 2>/dev/null | grep -E '5432|3306'")"
+    dbrule="$(ex_out "cat /etc/pve/firewall/9201.fw 2>/dev/null | grep -E '5432|3306'")"
     ex_assert_not_empty "a rule lets the web tier reach the database tier" "${dbrule}"
 
     local denyrule
@@ -623,7 +626,7 @@ check_task13_backup() {
     local jobs
     jobs="$(ex_out "pvesh get /cluster/backup --output-format json 2>/dev/null")"
     ex_assert_contains "a backup job exists" "${jobs}" "pbs-main"
-    ex_assert_contains "the job covers VM 100" "${jobs}" "100"
+    ex_assert_contains "the job covers VM 9201" "${jobs}" "9201"
     ex_assert_contains "the job covers CT 301" "${jobs}" "301"
     ex_assert_contains "the job runs in snapshot mode" "${jobs}" "snapshot"
     ex_assert_contains "the job is enabled" "${jobs}" "\"enabled\":1"
@@ -637,7 +640,7 @@ check_task13_backup() {
     # The backups in the datastore.
     local backups
     backups="$(ex_out "pvesm list pbs-main --content backup 2>/dev/null")"
-    ex_assert_contains "a backup of VM 100 exists" "${backups}" "vzdump-qemu-100"
+    ex_assert_contains "a backup of VM 9201 exists" "${backups}" "vzdump-qemu-9201"
     ex_assert_contains "a backup of CT 301 exists" "${backups}" "vzdump-lxc-301"
 
     # The restore. A restored guest is a VM whose ID is above the ones the
@@ -668,8 +671,8 @@ check_task14_ha() {
     # The managed resources.
     local managed
     managed="$(ex_out "ha-manager status 2>/dev/null")"
-    ex_assert_contains "VM 100 is HA managed" "${managed}" "vm:100"
-    ex_assert_contains "VM 101 is HA managed" "${managed}" "vm:101"
+    ex_assert_contains "VM 9201 is HA managed" "${managed}" "vm:9201"
+    ex_assert_contains "VM 9202 is HA managed" "${managed}" "vm:9202"
     ex_assert_contains "CT 301 is HA managed" "${managed}" "ct:301"
 
     # The state.
@@ -687,8 +690,8 @@ check_task14_ha() {
 
     # The guests have to be on shared storage.
     local disk
-    disk="$(ex_out "qm config 100 2>/dev/null | grep '^scsi0:'")"
-    ex_assert_contains "the HA managed VM is on the shared storage" "${disk}" "nfs-lab"
+    disk="$(ex_out "qm config 9201 2>/dev/null | grep '^scsi0:'")"
+    ex_assert_contains "the HA managed VM is on the local LVM-thin storage" "${disk}" "local-lvm"
 }
 
 # =============================================================================
@@ -733,16 +736,16 @@ check_task16_troubleshooting() {
 
     # The forensic snapshot has to exist.
     local snaps
-    snaps="$(ex_out "qm listsnapshot 100 2>/dev/null")"
+    snaps="$(ex_out "qm listsnapshot 9201 2>/dev/null")"
     ex_assert_contains "a snapshot was taken before the repair" "${snaps}" "incident"
 
     # The guest has to work again.
     local status
-    status="$(ex_guest_status vm 100)"
-    ex_assert_eq "VM 100 is running" "running" "${status}"
+    status="$(ex_guest_status vm 9201)"
+    ex_assert_eq "VM 9201 is running" "running" "${status}"
 
     if [ "${status}" = "running" ]; then
-        if ex_ok "qm guest cmd 100 ping >/dev/null 2>&1"; then
+        if ex_ok "qm guest cmd 9201 ping >/dev/null 2>&1"; then
             ex_pass "the guest agent answers again after the repair"
         else
             ex_fail "the guest agent answers again after the repair"
@@ -753,8 +756,8 @@ check_task16_troubleshooting() {
 
     # The incident has to be documented in the task log.
     local log
-    log="$(ex_out "pvesh get /cluster/log --limit 100 --output-format json 2>/dev/null \
-        | grep -c 'vms/100'")"
+    log="$(ex_out "pvesh get /cluster/log --limit 9201 --output-format json 2>/dev/null \
+        | grep -c 'vms/9201'")"
     ex_assert_ge "the incident is recorded in the task log" "${log}" "1"
 }
 

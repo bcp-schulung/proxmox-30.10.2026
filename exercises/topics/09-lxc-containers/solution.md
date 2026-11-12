@@ -108,7 +108,7 @@ and that has real data in it.
 This is the difference that confuses people coming from the VM world:
 
 ```bash
-qm config 100 | grep net0
+qm config 9201 | grep net0
 # net0: virtio=BC:76:4E:...,bridge=vmbr0,tag=20
 
 pct config 300 | grep net0
@@ -137,7 +137,7 @@ That is the **host's** kernel. The container has none of its own. Compare
 with a VM:
 
 ```bash
-qm guest exec 100 -- cat /proc/version
+qm guest exec 9201 -- cat /proc/version
 # Linux version 6.12.0-...-amd64 ...
 ```
 
@@ -195,9 +195,9 @@ pct exec 300 -- systemctl --failed --no-legend
 
 ```bash
 # The VM
-qm status 100
-qm config 100 | grep -E '^(cores|memory|scsihw|agent)'
-qm showcmd 100 | head -1 | cut -c1-120
+qm status 9201
+qm config 9201 | grep -E '^(cores|memory|scsihw|agent)'
+qm showcmd 9201 | head -1 | cut -c1-120
 
 # The container
 pct status 300
@@ -205,7 +205,7 @@ pct config 300 | grep -E '^(cores|memory|unprivileged|features)'
 pct exec 300 -- cat /proc/version
 ```
 
-| | VM 100 | CT 300 |
+| | VM 9201 | CT 300 |
 |---|---|---|
 | Process | `qemu-system-x86_64` | `lxc-start` + the container processes |
 | Kernel | Its own | The host's |

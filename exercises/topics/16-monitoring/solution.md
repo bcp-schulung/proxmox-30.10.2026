@@ -18,7 +18,7 @@ pvesh get /cluster/status
   { "type": "node", "id": "node/pve1", "name": "pve1", "status": "online", ... },
   { "type": "node", "id": "node/pve2", "name": "pve2", "status": "online", ... },
   { "type": "node", "id": "node/pve3", "name": "pve3", "status": "online", ... },
-  { "type": "qemu", "id": "qemu/100", "name": "web01", "status": "running", ... },
+  { "type": "qemu", "id": "qemu/9201", "name": "debian13-run-pve1", "status": "running", ... },
   { "type": "lxc", "id": "lxc/300", "name": "app01", "status": "running", ... }
 ]
 ```
@@ -87,8 +87,8 @@ pvesh get /nodes/pve1/lxc/300/status/current
 ```json
 {
   "status": "running",
-  "vmid": 100,
-  "name": "web01",
+  "vmid": 9201,
+  "name": "debian13-run-pve1",
   "cpu": 0.02,
   "mem": 536870912,
   "maxmem": 4294967296,
@@ -217,7 +217,7 @@ pvesh get /cluster/log --limit 50
     "id": "abc123",
     "time": 1762760123,
     "username": "root@pam",
-    "cmd": "pveum acl modify /vms/100 --users jsmith@ad-corp --roles VM-Operator",
+    "cmd": "pveum acl modify /vms/9201 --users jsmith@ad-corp --roles VM-Operator",
     "node": "pve1",
     "pid": 12345,
     "pstart": 12340,
@@ -234,8 +234,8 @@ pvesh get /cluster/log --limit 100 --output-format json | \
 ```
 
 ```
-2026-11-10 09:15:23 root@pam pveum acl modify /vms/100 --users jsmith@ad-corp --roles VM-Operator
-2026-11-10 09:20:41 root@pam vzdump: <root@pam> started task with UPID pvesm:100:...
+2026-11-10 09:15:23 root@pam pveum acl modify /vms/9201 --users jsmith@ad-corp --roles VM-Operator
+2026-11-10 09:20:41 root@pam vzdump: <root@pam> started task with UPID pvesm:9201:...
 ```
 
 ### The log is per node

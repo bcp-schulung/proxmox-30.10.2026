@@ -51,8 +51,8 @@ That single fact explains almost everything:
 | Use | A guest that hangs | Everything else |
 
 ```bash
-qm shutdown 100 --timeout 60     # wait up to 60 seconds
-qm shutdown 100 --forceStop 1    # cut the power after the timeout
+qm shutdown 9201 --timeout 60     # wait up to 60 seconds
+qm shutdown 9201 --forceStop 1    # cut the power after the timeout
 ```
 
 ## 3. The configuration areas
@@ -69,7 +69,7 @@ qm shutdown 100 --forceStop 1    # cut the power after the timeout
 ### The CPU type
 
 ```bash
-qm set 100 --cpu host
+qm set 9201 --cpu host
 ```
 
 `host` exposes the host's CPU features - the fastest option, and the reason
@@ -82,7 +82,7 @@ It costs a little performance and buys full portability.
 ## 4. The guest agent
 
 ```bash
-qm set 100 --agent enabled=1,fstrim_cloned_disks=1
+qm set 9201 --agent enabled=1,fstrim_cloned_disks=1
 ```
 
 The guest agent enables three things:
@@ -93,14 +93,14 @@ The guest agent enables three things:
 3. **A graceful shutdown** - `qm shutdown` becomes a real shutdown
 
 ```bash
-qm guest cmd 100 ping
-qm guest exec 100 -- ip -brief a
-qm guest exec 100 -- systemctl status qemu-guest-agent
+qm guest cmd 9201 ping
+qm guest exec 9201 -- ip -brief a
+qm guest exec 9201 -- systemctl status qemu-guest-agent
 ```
 
 ## 5. What you do
 
-1. Create the web tier VM 100 from the template - a full clone.
+1. Create the web tier VM 9201 from the template - a full clone.
 2. Configure it: CPU, memory, network with the VLAN tag, disk controller,
    guest agent.
 3. Give it its own cloud-init drive with its own hostname.

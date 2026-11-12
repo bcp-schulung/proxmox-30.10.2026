@@ -80,7 +80,7 @@ bug - the guest's traffic enters the cluster through the node it runs on.
 The firewall and the VLANs work together:
 
 ```bash
-qm set 100 --net0 virtio,bridge=vmbr0,tag=20
+qm set 9201 --net0 virtio,bridge=vmbr0,tag=20
 pct set 301 --net0 name=eth0,bridge=vmbr0,tag=40,ip=dhcp
 ```
 

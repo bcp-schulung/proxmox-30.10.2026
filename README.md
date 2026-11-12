@@ -42,8 +42,9 @@ Everything is driven by four scripts:
    └──────────────────────────────────────────────────────────────────────────┘
 
    Cluster "prod-cluster" · shared storage "nfs-lab" · local storage "local-lvm"
-   Guests: VM 9000 (template) → VM 100 / 101 (full clones) → VM 102 (linked clone)
-           CT 300 app01, CT 301 db01
+   Templates: 9101 / 9102 / 9103 (one per node, on local-lvm)
+   Guests:    9201 / 9202 / 9203 (one running per node, full clone of that node's template)
+              CT 300 app01, CT 301 db01
 ```
 
 ## Prerequisites
@@ -131,7 +132,8 @@ Eight phases, each recorded in `.state/lab.json` so the script is resumable:
 5. **cluster** - `pvecm create prod-cluster` + `pvecm add` for the other nodes
 6. **storage** - `local-lvm`, the shared NFS storage `nfs-lab`, the local dir storage
 7. **backup** - the PBS datastore and the `backup@pbs` user, registered as `pbs-main`
-8. **guests** - the golden image, the template, the clones and the two containers
+8. **guests** - the Debian image and the template on each node, the running guest on each
+   node, and the two containers
 
 ### `debug.sh`
 

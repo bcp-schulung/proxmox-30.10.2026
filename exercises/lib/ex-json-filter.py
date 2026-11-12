@@ -115,7 +115,7 @@ def literal_value(text):
         return None
     if len(text) >= 2 and text[0] in "\"'" and text[-1] == text[0]:
         return text[1:-1]
-    # An integer stays an integer - '9000' must not become '9000.0'.
+    # An integer stays an integer - '9101' must not become '9101.0'.
     try:
         return int(text)
     except ValueError:

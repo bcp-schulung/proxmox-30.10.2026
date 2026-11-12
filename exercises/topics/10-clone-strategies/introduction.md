@@ -14,10 +14,10 @@ A clone is a new guest built from a template. The question is whether it
 gets its own copy of the disk or a view of the base disk.
 
 ```
-   Template 9000 (base-9000-disk-0)
+   Template 9101 (base-9101-disk-1)
         │
-        ├── Full clone 100  -> vm-100-disk-0      (a complete copy)
-        └── Linked clone 102 -> base-9000-disk-0  (a copy-on-write view)
+        ├── Full clone 9201  -> vm-9201-disk-1      (a complete copy)
+        └── Linked clone     -> base-9101-disk-1    (a copy-on-write view)
 ```
 
 ## 2. The decision
@@ -33,19 +33,50 @@ gets its own copy of the disk or a view of the base disk.
 is deleted, every linked clone breaks.
 
 ```bash
-qm delete 9000
-# unable to delete VM 9000: unable to free disk 'nfs-lab:base-9000-disk-0' -
-# logical volume 'vm-9000-disk-0' is used in configuration
+qm delete 9101
+# unable to delete VM 9101: unable to free disk 'local-lvm:base-9101-disk-1' -
+# logical volume 'vm-9101-disk-1' is used in configuration
 ```
 
 Proxmox protects you here - it refuses to delete a template that has linked
 clones. But it is better to know the rule than to rely on the guard.
 
-## 3. The clone flags
+## 3. Where the template has to live
+
+The two kinds of clone have contradictory requirements, and this is the part
+that trips people up:
+
+- A **full clone** can be moved to another node only when the source is on
+  **shared** storage. A template on the local storage of a node is refused
+  with:
+
+  ```
+  can't clone VM to node 'pve2' (VM uses local storage)
+  ```
+
+- A **linked clone** is a snapshot of the template's disk, and a snapshot is
+  only possible on a storage that supports them. NFS does not:
+
+  ```
+  Linked clone feature is not supported for 'nfs-lab:9000/...'
+  ```
+
+A template on the node's **own** local LVM-thin storage satisfies both
+constraints. That is where the templates of this lab live:
+
+```
+   pve1: template 9101 -> guest 9201
+   pve2: template 9102 -> guest 9202
+   pve3: template 9103 -> guest 9203
+```
+
+Every guest is a **full clone** of the template on the node it runs on.
+
+## 4. The clone flags
 
 ```bash
-qm clone 9000 100 --name web01 --full --storage nfs-lab
-qm clone 9000 102 --name web-test --storage nfs-lab        # linked
+qm clone 9101 9201 --name debian13-run-pve1 --full --storage local-lvm
+qm clone 9101 9210 --name scratch --full 0      # a linked clone
 ```
 
 | Flag | Meaning |
@@ -56,33 +87,33 @@ qm clone 9000 102 --name web-test --storage nfs-lab        # linked
 | `--name` | The name of the new guest |
 | `--target` | The node the clone goes to |
 
-The `--target` flag is worth knowing: a clone can be created directly on
-another node. On a cluster with shared storage that is how you build a
-redundant pair.
+The `--target` flag is worth knowing, but it only helps when the source is on
+shared storage. With the templates of this lab on `local-lvm`, the clone is
+made on the node that owns the template.
 
-## 4. The cloud-init, again
+## 5. The cloud-init, again
 
 Every clone needs its own cloud-init drive, otherwise it boots with the
 template's hostname and credentials.
 
 ```bash
-qm set 102 --ide2 local:cloudinit --ipconfig0 ip=dhcp \
-  --cicustom local:/tmp/ci-102.yaml
+qm set 9203 --ide2 local:cloudinit --ipconfig0 ip=dhcp \
+  --cicustom local:/tmp/ci-9203.yaml
 ```
 
-## 5. What you do
+## 6. What you do
 
-1. Create the full clone VM 102 `web-test` on the shared storage.
-2. Verify that it really is a linked clone.
+1. Clone the template of your node into a new guest.
+2. Verify that the clone has a disk of its own.
 3. Give it its own cloud-init drive.
 4. Verify that the template is still intact.
 
-## 6. How it is checked
+## 7. How it is checked
 
 ```bash
 ./exercise.sh
 ```
 
-## 7. The reference
+## 8. The reference
 
 `solution.md`.

@@ -58,6 +58,7 @@ sudo mkdir -p /var/lib/proxmox-backup/datastore
 # -----------------------------------------------------------------------------
 sudo install -m 0755 "${PACKER_SCRIPTS_DIR:-/opt/lab-build}/lab-network.sh" /usr/local/sbin/lab-network.sh
 install -m 0755 "${PACKER_SCRIPTS_DIR:-/opt/lab-build}/lab-netcheck.sh" /usr/local/sbin/lab-netcheck.sh
+sudo install -m 0755 "${PACKER_SCRIPTS_DIR:-/opt/lab-build}/lab-detached.sh" /usr/local/sbin/lab-detached
 
 sudo tee /etc/systemd/system/lab-network.service >/dev/null << 'UNIT_EOF'
 [Unit]

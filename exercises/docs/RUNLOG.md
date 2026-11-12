@@ -35,19 +35,19 @@ Only four instances are running: pve1, pve2, pve3 and nfs1. There is no
 `pbs1` at all, and `10.20.2.243` does not answer on any port. The
 `pbs-main` storage therefore does not exist.
 
-**2. The template VM 9000 was broken.**
+**2. The template VM 9101 was broken.**
 
 ```
 scsi0:    (missing)
 boot:     order=net0            <- the boot order pointed at the network
-unused0:  nfs-lab:9000/vm-9000-disk-0.raw
-unused1:  nfs-lab:9000/vm-9000-disk-1.raw
+unused0:  nfs-lab:9101/vm-9101-disk-0.raw
+unused1:  nfs-lab:9101/vm-9101-disk-1.raw
 ```
 
 `qm importdisk` had created `unused0` and `unused1`, but the `qm set
 --scsi0` step never ran, so the VM had no boot disk at all.
 
-**3. No clones and no containers.** No VM 100/101/102, no CT 300/301/302,
+**3. No clones and no containers.** No VM 9201/9202/9203, no CT 300/301/302,
 and no `vztmpl` in the shared storage.
 
 **4. The guests phase never completed.** `vms_ready: false`,

@@ -68,7 +68,7 @@ pvesm add pbs pbs-main --server 10.20.2.21 --datastore main \
 ```bash
 pvesh create /cluster/backup \
   --storage pbs-main \
-  --vmid 100,301 \
+  --vmid 9201,301 \
   --schedule daily \
   --mode snapshot \
   --enabled 1 \
@@ -113,9 +113,9 @@ deliberately for the forensic analysis.
 ## 7. What you do
 
 1. Create the backup job with the retention policy.
-2. Run a manual backup of VM 100 and of CT 301.
+2. Run a manual backup of VM 9201 and of CT 301.
 3. Verify that the backups exist in the datastore.
-4. Restore VM 100 into a new VMID.
+4. Restore VM 9201 into a new VMID.
 5. Start the restored guest and verify the agent answers.
 
 ## 8. How it is checked

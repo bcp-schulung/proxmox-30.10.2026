@@ -54,7 +54,7 @@ running, and only then does the CRM restart the guest elsewhere.
 The shared storage requirement is enforced:
 
 ```bash
-ha-manager add vm:100 --group prod-nodes
+ha-manager add vm:9201 --group prod-nodes
 # cannot add HA managed resource: storage 'local-lvm' is not shared
 ```
 
@@ -74,7 +74,7 @@ ha-manager config --group prod-nodes
 ## 5. The resource
 
 ```bash
-ha-manager add vm:100 --group prod-nodes --max_restart 3 --max_relocate 2
+ha-manager add vm:9201 --group prod-nodes --max_restart 3 --max_relocate 2
 ```
 
 | Option | Meaning |
@@ -93,7 +93,7 @@ ha-manager status
 
 ```
 Type     ID          Status    Last HA error
-vm       100         started
+vm       9201         started
 ct       301         started
 node    pve1         active
 node    pve2         active
@@ -118,7 +118,7 @@ CRM restarts everything unnecessarily.
 ## 8. What you do
 
 1. Create the HA group `prod-nodes` with all three nodes.
-2. Add VM 100, VM 101 and CT 301 to it.
+2. Add VM 9201, VM 9202 and CT 301 to it.
 3. Set the restart and relocate policies.
 4. Verify the status.
 5. Put a node into maintenance and back.

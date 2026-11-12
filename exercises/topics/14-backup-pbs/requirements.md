@@ -13,7 +13,7 @@
 ## The backup job
 
 - [ ] A backup job exists that targets `pbs-main`.
-- [ ] The job covers VM 100.
+- [ ] The job covers VM 9201.
 - [ ] The job covers CT 301.
 - [ ] The job runs in `snapshot` mode.
 - [ ] The job is enabled.
@@ -24,7 +24,7 @@
 
 ## The backups
 
-- [ ] A backup of VM 100 exists in the datastore.
+- [ ] A backup of VM 9201 exists in the datastore.
 - [ ] A backup of CT 301 exists in the datastore.
 
 ## The restore
@@ -44,5 +44,5 @@ usable. A backup job that runs every night and has never been restored is a
 scheduled hope, not a backup.
 
 **"A VMID of at least 190"** is the check for "the restore went into a new
-guest". A restore into VM 100 itself would overwrite the original - and
+guest". A restore into VM 9201 itself would overwrite the original - and
 then the verification could not tell a successful restore from a no-op.

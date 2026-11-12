@@ -15,15 +15,15 @@
 
 - [ ] The API token `automation@pve!terraform` exists.
 - [ ] The token has privilege separation enabled.
-- [ ] The token has its own ACL entry on `/vms/100`.
+- [ ] The token has its own ACL entry on `/vms/9201`.
 - [ ] The token's ACL is scoped - it is not on the root path.
 
 ## The token's reach
 
 - [ ] The token can read the cluster resources.
-- [ ] The token can read the configuration of VM 100.
+- [ ] The token can read the configuration of VM 9201.
 - [ ] The token **cannot** read the configuration of CT 301 - the token is
-      only scoped to `/vms/100`.
+      only scoped to `/vms/9201`.
 
 ## The storage
 

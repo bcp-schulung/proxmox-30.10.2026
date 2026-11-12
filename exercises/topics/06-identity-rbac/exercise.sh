@@ -82,13 +82,13 @@ ex_section "The ACL"
 
 acl="$(ex_out "pveum acl list 2>/dev/null")"
 
-ex_assert_contains "an ACL grants VM-Operator to jsmith@ad-corp on /vms/100" \
-    "${acl}" "/vms/100"
+ex_assert_contains "an ACL grants VM-Operator to jsmith@ad-corp on /vms/9201" \
+    "${acl}" "/vms/9201"
 ex_assert_contains "the ACL names the user" "${acl}" "jsmith@ad-corp"
 ex_assert_contains "the ACL names the role" "${acl}" "VM-Operator"
 
-ex_assert_contains "an ACL grants VM-Operator to jsmith@ad-corp on /vms/101" \
-    "${acl}" "/vms/101"
+ex_assert_contains "an ACL grants VM-Operator to jsmith@ad-corp on /vms/9202" \
+    "${acl}" "/vms/9202"
 
 # The scope must not be broadened.
 root_entry="$(ex_out "pveum acl list 2>/dev/null | grep -E '^/[[:space:]]'")"
@@ -128,7 +128,7 @@ ex_assert_eq "the token has privilege separation enabled" "1" "${privsep}"
 
 token_acl="$(ex_out "pveum acl list 2>/dev/null | grep 'automation@pve!terraform'")"
 ex_assert_not_empty "the token has its own ACL entry" "${token_acl}"
-ex_assert_contains "the token ACL is scoped to /vms/100" "${token_acl}" "/vms/100"
+ex_assert_contains "the token ACL is scoped to /vms/9201" "${token_acl}" "/vms/9201"
 ex_assert_contains "the token ACL grants the VM-Operator role" "${token_acl}" "VM-Operator"
 
 # The token's ACL must be its own entry, not the user's.

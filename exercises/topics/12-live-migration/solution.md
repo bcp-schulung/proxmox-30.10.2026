@@ -9,11 +9,11 @@
 ## 1. The precondition
 
 ```bash
-qm status 100
+qm status 9201
 # status: running
 
-qm config 100 | grep scsi0
-# scsi0: nfs-lab:vm-100-disk-0,discard=on,iothread=1
+qm config 9201 | grep scsi0
+# scsi0: nfs-lab:vm-9201-disk-0,discard=on,iothread=1
 ```
 
 The disk is on the shared storage, so the migration is possible.
@@ -21,7 +21,7 @@ The disk is on the shared storage, so the migration is possible.
 ### The refusal, when the disk is local
 
 ```bash
-qm migrate 100 pve2 --online
+qm migrate 9201 pve2 --online
 # migrate VMs with local disks are not supported
 ```
 
@@ -31,8 +31,8 @@ where the students understand *why* the shared storage exists.
 The fix:
 
 ```bash
-qm move_disk 100 scsi0 nfs-lab --target-directory vm-100-disk-0
-qm migrate 100 pve2 --online
+qm move_disk 9201 scsi0 nfs-lab --target-directory vm-9201-disk-0
+qm migrate 9201 pve2 --online
 ```
 
 `qm move_disk` copies the disk to the shared storage. On a live guest the
@@ -41,7 +41,7 @@ disk is copied while it runs, and the switch happens at the end.
 ## 2. The CPU type
 
 ```bash
-qm config 100 | grep '^cpu:'
+qm config 9201 | grep '^cpu:'
 # cpu: host
 ```
 
@@ -49,7 +49,7 @@ qm config 100 | grep '^cpu:'
 guest to a node with a different CPU.
 
 ```bash
-qm set 100 --cpu x86-64-v2-AES
+qm set 9201 --cpu x86-64-v2-AES
 ```
 
 For a cluster that has to be able to migrate freely, a named baseline is the
@@ -63,7 +63,7 @@ right choice. The cost is a few percent of performance.
 ## 3. The migration
 
 ```bash
-qm migrate 100 pve2 --online
+qm migrate 9201 pve2 --online
 ```
 
 ```
@@ -80,21 +80,21 @@ About two seconds for a 4 GB guest.
 ### What happened
 
 ```bash
-pvesh get /cluster/resources --type vm | grep 100
+pvesh get /cluster/resources --type vm | grep 9201
 # vmid type node status vmid  ...
-# 100  qemu  pve2 running
+# 9201  qemu  pve2 running
 ```
 
 ```bash
-qm status 100
+qm status 9201
 # status: running
 ```
 
 ### The guest never noticed
 
 ```bash
-qm guest cmd 100 ping
-qm guest exec 100 -- cat /proc/uptime
+qm guest cmd 9201 ping
+qm guest exec 9201 -- cat /proc/uptime
 # 3284.71 19204.33
 ```
 
@@ -105,21 +105,21 @@ something near zero.
 
 ```bash
 # Offline - the guest is stopped, moved and started again
-qm migrate 100 pve2
+qm migrate 9201 pve2
 
 # With the local disks - slow, but possible
-qm migrate 100 pve2 --with-local-disks
+qm migrate 9201 pve2 --with-local-disks
 
 # To the target's local storage
-qm migrate 100 pve2 --target-local
+qm migrate 9201 pve2 --target-local
 ```
 
 ### The offline migration with a local disk
 
 ```bash
-qm shutdown 100
-qm migrate 100 pve2
-qm start 100
+qm shutdown 9201
+qm migrate 9201 pve2
+qm start 9201
 ```
 
 This works with any storage, because the guest is not running and the disk
@@ -157,20 +157,20 @@ The `qmpstatus` moves from `prelaunch` through `postmigrate` to `running`.
 
 ```bash
 # The precondition
-qm status 100
-qm config 100 | grep scsi0        # must be nfs-lab
+qm status 9201
+qm config 9201 | grep scsi0        # must be nfs-lab
 
 # The CPU type - portable
-qm set 100 --cpu x86-64-v2-AES
+qm set 9201 --cpu x86-64-v2-AES
 
 # The migration
-qm migrate 100 pve2 --online
+qm migrate 9201 pve2 --online
 
 # The verification
-qm status 100
-pvesh get /cluster/resources --type vm | grep 100
-qm guest cmd 100 ping
-qm guest exec 100 -- cat /proc/uptime
+qm status 9201
+pvesh get /cluster/resources --type vm | grep 9201
+qm guest cmd 9201 ping
+qm guest exec 9201 -- cat /proc/uptime
 ```
 
 ## 8. The common mistakes

@@ -276,14 +276,25 @@ the state file and the generated .env"
         fi
     fi
 
+    # The dry run must not change anything.
+    #
+    # The teardown helpers are called directly and not through the 'run'
+    # wrapper, so they have to be skipped explicitly. A dry run that
+    # destroys the guests is the opposite of what it promises.
     if [ "${SCOPE}" = "cluster" ] || [ "${SCOPE}" = "all" ]; then
-        lab_destroy_guests
-        lab_clean_nfs_export
-        lab_reset_cluster
+        if [ "${DRY_RUN}" = "1" ]; then
+            printf '%s  [dry-run] the guests would be destroyed%s\n' "${C_DIM}" "${C_RESET}"
+            printf '%s  [dry-run] the shared NFS export would be emptied%s\n' "${C_DIM}" "${C_RESET}"
+            printf '%s  [dry-run] the cluster configuration would be reset%s\n' "${C_DIM}" "${C_RESET}"
+        else
+            lab_destroy_guests
+            lab_clean_nfs_export
+            lab_reset_cluster
+        fi
     fi
 
     if [ "${SCOPE}" = "aws" ] || [ "${SCOPE}" = "all" ]; then
-        if [ "${SCOPE}" = "all" ]; then
+        if [ "${SCOPE}" = "all" ] && [ "${DRY_RUN}" != "1" ]; then
             lab_destroy_guests
             lab_clean_nfs_export
             lab_reset_cluster

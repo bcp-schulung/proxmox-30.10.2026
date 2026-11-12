@@ -52,7 +52,7 @@ The infrastructure you are building:
 ```
 Cluster "prod-cluster"          3 nodes, quorate
 ├── Storage: local-lvm (local), nfs-lab (shared), pbs-main (backup)
-├── Guests: VM 100/101 (web), VM 102 (test), CT 300/301/302 (app/db/cache)
+├── Guests: VM 9201/9202 (web), VM 9203 (test), CT 300/301/302 (app/db/cache)
 ├── Identity: realm ad-corp, user jsmith, role VM-Operator, API token
 ├── HA group prod-nodes, HA managed web tier
 └── Daily backup job with 7/4/6 retention

@@ -22,8 +22,8 @@ Proxmox permissions combine three things:
       ├── User: jsmith@ad-corp
       │      └── Group membership
       │             └── Role: VM-Operator  (VM.Console, VM.PowerMgmt, VM.Monitor)
-      │                    └── ACL path: /vms/100
-      │                           └── Effective permission on VM 100
+      │                    └── ACL path: /vms/9201
+      │                           └── Effective permission on VM 9201
       │
       └── API Token: automation@pve!terraform
              └── its own ACL, its own privileges
@@ -78,24 +78,24 @@ role.
 ├── nodes                          the cluster nodes
 ├── storage                        the storages
 ├── vms                            the guests
-│   ├── 100
-│   └── 101
+│   ├── 9201
+│   └── 9202
 ├── pool                           resource pools
 └── sdns                           the SDN configuration
 ```
 
-An ACL on `/vms/100` applies to VM 100. An ACL on `/vms` applies to all
+An ACL on `/vms/9201` applies to VM 9201. An ACL on `/vms` applies to all
 guests. An ACL on `/` applies to everything - which is what `PVEAdmin` on
 `/` means, and which is almost never what you want.
 
 ```bash
-pveum acl modify /vms/100 --users jsmith@ad-corp --roles VM-Operator
+pveum acl modify /vms/9201 --users jsmith@ad-corp --roles VM-Operator
 ```
 
 ### The propagation
 
-An ACL set on `/vms/100` propagates to the child objects of VM 100 - its
-disks and its network interfaces. It does not propagate sideways to VM 101.
+An ACL set on `/vms/9201` propagates to the child objects of VM 9201 - its
+disks and its network interfaces. It does not propagate sideways to VM 9202.
 
 ## 5. The API token
 
@@ -111,7 +111,7 @@ decoration. With it, the token has exactly the privileges that its own ACL
 grants, and nothing else.
 
 ```bash
-pveum acl modify /vms/100 --tokens 'automation@pve!terraform' --roles VM-Operator
+pveum acl modify /vms/9201 --tokens 'automation@pve!terraform' --roles VM-Operator
 ```
 
 The token secret is shown **once**. After that it cannot be read again -
@@ -122,7 +122,7 @@ only rotated.
 1. Create the realm `ad-corp`.
 2. Create the user `jsmith@ad-corp`.
 3. Create the role `VM-Operator` with exactly three privileges.
-4. Grant the role on `/vms/100` and `/vms/101` - and nowhere else.
+4. Grant the role on `/vms/9201` and `/vms/9202` - and nowhere else.
 5. Create the privilege separated API token.
 6. Give the token its own ACL.
 7. Check the effective permissions of both.

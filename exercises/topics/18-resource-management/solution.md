@@ -9,13 +9,13 @@
 ## 1. The CPU
 
 ```bash
-qm set 100 --sockets 1 --cores 2 --cpulimit 2 --cpuunits 2048
+qm set 9201 --sockets 1 --cores 2 --cpulimit 2 --cpuunits 2048
 ```
 
 Verify:
 
 ```bash
-qm config 100 | grep -E '^(sockets|cores|cpulimit|cpuunits|cpu)'
+qm config 9201 | grep -E '^(sockets|cores|cpulimit|cpuunits|cpu)'
 ```
 
 ```
@@ -44,14 +44,14 @@ Three guests on a node with 8 cores:
 
 | Guest | Limit | Weight | Under contention it gets |
 |---|---|---|---|
-| web01 | 2 | 2048 | 2/8 of the CPU |
-| web02 | 2 | 1024 | 1/8 of the CPU |
+| debian13-run-pve1 | 2 | 2048 | 2/8 of the CPU |
+| debian13-run-pve2 | 2 | 1024 | 1/8 of the CPU |
 | db01 | 4 | 4096 | 4/8 of the CPU |
 
 ### The CPU type
 
 ```bash
-qm set 100 --cpu x86-64-v2-AES
+qm set 9201 --cpu x86-64-v2-AES
 ```
 
 `host` is faster, but it is not portable between the nodes. A cluster that
@@ -61,7 +61,7 @@ has to be able to migrate freely uses a named baseline.
 
 ```bash
 # The web tier - the balloon is fine here
-qm set 100 --memory 4096 --balloon 2048
+qm set 9201 --memory 4096 --balloon 2048
 ```
 
 | Setting | Meaning |
@@ -87,22 +87,22 @@ in the middle of a query.
 ### Grow the disk
 
 ```bash
-qm resize 100 scsi0 +20G
+qm resize 9201 scsi0 +20G
 ```
 
 Verify:
 
 ```bash
-qm config 100 | grep scsi0
-# scsi0: nfs-lab:vm-100-disk-0,size=52G,discard=on,iothread=1
+qm config 9201 | grep scsi0
+# scsi0: nfs-lab:vm-9201-disk-0,size=52G,discard=on,iothread=1
 ```
 
 > **The grow is only half of the work.** The guest sees a bigger block
 > device, but the partition and the filesystem are still the old size.
 > ```bash
-> qm guest exec 100 -- lsblk
-> qm guest exec 100 -- growpart /dev/sda 1
-> qm guest exec 100 -- resize2fs /dev/sda1
+> qm guest exec 9201 -- lsblk
+> qm guest exec 9201 -- growpart /dev/sda 1
+> qm guest exec 9201 -- resize2fs /dev/sda1
 > ```
 > A student who grows the disk and then finds that the guest still reports
 > the old size has done nothing wrong - they just have to finish the job
@@ -111,7 +111,7 @@ qm config 100 | grep scsi0
 ### Add a second disk
 
 ```bash
-qm set 100 --scsi1 nfs-lab:10,discard=on,iothread=1
+qm set 9201 --scsi1 nfs-lab:10,discard=on,iothread=1
 ```
 
 The hotplug works on a running guest. The new disk appears in the guest
@@ -119,14 +119,14 @@ immediately - as `/dev/vdb` - and it has to be partitioned and formatted
 inside the guest:
 
 ```bash
-qm guest exec 100 -- lsblk
-qm guest exec 100 -- mkfs.ext4 /dev/vdb
+qm guest exec 9201 -- lsblk
+qm guest exec 9201 -- mkfs.ext4 /dev/vdb
 ```
 
 ### Remove it again
 
 ```bash
-qm set 100 --delete scsi1
+qm set 9201 --delete scsi1
 ```
 
 ## 4. The container limits
@@ -162,8 +162,8 @@ swap: 512
 For the changes that need a reboot, Proxmox offers the pending mechanism:
 
 ```bash
-qm set 100 --cores 4 --pending 1
-qm pending 100
+qm set 9201 --cores 4 --pending 1
+qm pending 9201
 ```
 
 ```json
@@ -197,9 +197,9 @@ pvesh get /nodes/pve1/qemu/100/status/current
 
 ```bash
 # From the guest
-qm guest exec 100 -- cat /proc/loadavg
-qm guest exec 100 -- free -m
-qm guest exec 100 -- df -h
+qm guest exec 9201 -- cat /proc/loadavg
+qm guest exec 9201 -- free -m
+qm guest exec 9201 -- df -h
 ```
 
 ### The load average
@@ -208,24 +208,24 @@ A load average of 2.0 on a 2-core guest means the guest has more work
 queued than it can process. On a 4-core guest, the same value is idle.
 
 ```bash
-qm guest exec 100 -- nproc
+qm guest exec 9201 -- nproc
 ```
 
 ## 7. The complete sequence
 
 ```bash
 # The CPU
-qm set 100 --sockets 1 --cores 2 --cpulimit 2 --cpuunits 2048 --cpu x86-64-v2-AES
+qm set 9201 --sockets 1 --cores 2 --cpulimit 2 --cpuunits 2048 --cpu x86-64-v2-AES
 
 # The memory - the web tier balloons
-qm set 100 --memory 4096 --balloon 2048
+qm set 9201 --memory 4096 --balloon 2048
 
 # The memory - the database tier does not
 pct set 301 --memory 2048 --balloon 0
 
 # The disk
-qm resize 100 scsi0 +20G
-qm set 100 --scsi1 nfs-lab:10,discard=on,iothread=1
+qm resize 9201 scsi0 +20G
+qm set 9201 --scsi1 nfs-lab:10,discard=on,iothread=1
 
 # The container limits
 pct set 300 --cores 1 --memory 1024 --swap 512

@@ -72,6 +72,11 @@ main() {
     preflight_tools
     validate_config
 
+    # Only one run at a time. Two runs against the same cluster destroy
+    # each other's work: one creates the templates while the other tears
+    # the guests down.
+    acquire_run_lock "provision.sh"
+
     if [ "${SKIP_AMI_BUILD}" = "1" ]; then
         export LAB_SKIP_PACKER_CHECK=1
     fi

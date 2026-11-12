@@ -88,8 +88,8 @@ corosync.
 
 ```bash
 # The web tier
-qm set 100 --net0 virtio,bridge=vmbr0,tag=20
-qm set 101 --net0 virtio,bridge=vmbr0,tag=20
+qm set 9201 --net0 virtio,bridge=vmbr0,tag=20
+qm set 9202 --net0 virtio,bridge=vmbr0,tag=20
 
 # The application and the database tier
 pct set 300 --net0 name=eth0,bridge=vmbr0,tag=30,ip=dhcp
@@ -100,9 +100,9 @@ pct set 301 --net0 name=eth0,bridge=vmbr0,tag=40,ip=dhcp
 > needs a reboot, because the tag is applied when the tap device is
 > created. Proxmox offers the change as a pending update:
 > ```bash
-> qm set 100 --net0 virtio,bridge=vmbr0,tag=20 --pending 1
-> qm pending 100
-> qm reboot 100
+> qm set 9201 --net0 virtio,bridge=vmbr0,tag=20 --pending 1
+> qm pending 9201
+> qm reboot 9201
 > ```
 
 Verify:
@@ -141,7 +141,7 @@ Verify:
 
 ```bash
 pvesh get /nodes/pve1/qemu/100/firewall/rules
-cat /etc/pve/firewall/100.fw
+cat /etc/pve/firewall/9201.fw
 cat /etc/pve/firewall/301.fw
 ```
 
@@ -208,8 +208,8 @@ pvesh create /cluster/firewall/rules --action ACCEPT --type in \
 pvesh set /cluster/firewall/options --enable 1 --policy_in DROP --policy_out ACCEPT
 
 # 3. The VLAN tags
-qm set 100 --net0 virtio,bridge=vmbr0,tag=20
-qm set 101 --net0 virtio,bridge=vmbr0,tag=20
+qm set 9201 --net0 virtio,bridge=vmbr0,tag=20
+qm set 9202 --net0 virtio,bridge=vmbr0,tag=20
 pct set 300 --net0 name=eth0,bridge=vmbr0,tag=30,ip=dhcp
 pct set 301 --net0 name=eth0,bridge=vmbr0,tag=40,ip=dhcp
 

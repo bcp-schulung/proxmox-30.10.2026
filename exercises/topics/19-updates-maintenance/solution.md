@@ -149,7 +149,7 @@ ha-manager status
 
 ```
 Type     ID          Status    Last HA error
-vm       100         started
+vm       9201         started
 node    pve1         maintenance
 node    pve2         active
 node    pve3         active

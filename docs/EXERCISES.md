@@ -14,12 +14,27 @@ Where AWS forces a deviation, it is called out explicitly.
 | Storage | `nfs-lab` | shared | NFS, enables live migration and HA |
 | Storage | `pbs-main` | shared | Proxmox Backup Server |
 | Bridge | `vmbr0` | | 10.10.10.1 / 10.10.20.1 / 10.10.30.1 |
-| Template | VM 9000 `debian13-template` | `nfs-lab` | Debian 13, cloud-init, guest agent, on pve1 |
-| VM | 100 `web01` | `nfs-lab` | Full clone, on pve1 - the live-migration target |
-| VM | 101 `web02` | `nfs-lab` | Full clone, on pve2 |
-| VM | 102 `web-test` | `nfs-lab` | **Linked** clone of 9000, on pve3 |
+| Template | VM 9101 `debian13-tpl-pve1` | `local-lvm` | Debian 13, cloud-init, guest agent, on pve1 |
+| Template | VM 9102 `debian13-tpl-pve2` | `local-lvm` | Debian 13, on pve2 |
+| Template | VM 9103 `debian13-tpl-pve3` | `local-lvm` | Debian 13, on pve3 |
+| VM | 9201 `debian13-run-pve1` | `local-lvm` | Full clone of 9101, on pve1 |
+| VM | 9202 `debian13-run-pve2` | `local-lvm` | Full clone of 9102, on pve2 |
+| VM | 9203 `debian13-run-pve3` | `local-lvm` | Full clone of 9103, on pve3 |
 | CT | 300 `app01` | `nfs-lab` | Unprivileged LXC, on pve1 |
 | CT | 301 `db01` | `nfs-lab` | Unprivileged LXC, on pve2 |
+
+There is **one template per node** and **one running guest per node**. Each guest is a
+full clone of the template on the node it runs on. That layout is not arbitrary:
+
+- A full clone can be moved to another node only when the source is on shared storage.
+  A template on the local storage of a node is refused with
+  `can't clone VM to node 'pve2' (VM uses local storage)`.
+- A linked clone is a snapshot of the template's disk, and a snapshot is only possible on
+  a storage that supports them. NFS does not:
+  `Linked clone feature is not supported for 'nfs-lab:9000/...'`.
+
+A template on the node's **own** local LVM-thin storage satisfies both constraints, so
+that is where the templates live.
 
 The guests are spread over the nodes so that the cluster behaves like a real one and so
 that the shared storage is genuinely exercised. `provision.sh` prints the final placement
@@ -89,61 +104,76 @@ See the security day below for the full RBAC exercise.
 ### Exercise: the VM lifecycle
 
 ```bash
-qm status 100
-qm config 100
-qm showcmd 100              # the exact QEMU command line
-qm start 100
-qm shutdown 100
+qm status 9201
+qm config 9201
+qm showcmd 9201              # the exact QEMU command line
+qm shutdown 9201
+qm start 9201
 ```
 
 ### Exercise: a template and its clones
 
-The lab is pre-provisioned with all three, but the exercise is to build one yourself:
+The lab is pre-provisioned with a template and a running guest on every node, but the
+exercise is to build one yourself. Clone from the template **on the node you are logged
+into** - a template on the local storage of a node cannot be cloned onto a different one:
 
 ```bash
-qm clone 9000 110 --name web03 --full        # full clone
-qm clone 9000 120 --name web04               # linked clone
-qm set 110 --net0 virtio,bridge=vmbr0
-qm start 110
+qm clone 9101 9110 --name web03 --full --storage local-lvm
+qm set 9110 --net0 virtio,bridge=vmbr0
+qm start 9110
 ```
 
-Then compare them - the linked clone shares the base disk and is created in seconds:
+Then compare the clone with the template it came from:
 
 ```bash
-qm config 110 | grep scsi0
-qm config 120 | grep scsi0
+qm config 9110 | grep scsi0
+qm config 9101 | grep scsi0
 ```
+
+The clone has a disk of its own (`vm-9110-disk-N`); the template holds the base disk
+(`base-9101-disk-N`) that every clone is made from.
 
 ### Exercise: resources
 
 ```bash
-qm set 100 --sockets 1 --cores 4 --cpulimit 2 --cpuunits 2048
-qm set 100 --memory 8192 --balloon 4096
-qm resize 100 scsi0 +10G
-qm set 100 --scsi1 nfs-lab:5
+qm set 9201 --sockets 1 --cores 4 --cpulimit 2 --cpuunits 2048
+qm set 9201 --memory 8192 --balloon 4096
+qm resize 9201 scsi0 +10G
+qm set 9201 --scsi1 nfs-lab:5
 ```
 
 ### Exercise: snapshots and rollback
 
 ```bash
-qm snapshot 100 pre-update --description "Before patching"
+qm snapshot 9201 pre-update --description "Before patching"
 # ... make a change inside the guest ...
-qm rollback 100 pre-update
-qm delsnapshot 100 pre-update
+qm rollback 9201 pre-update
+qm delsnapshot 9201 pre-update
 ```
 
 ### Exercise: live migration
 
-VM 100 lives on the shared storage, so it can move between the nodes:
+Live migration needs the disk on **shared** storage, because the target node has to be
+able to open the same volume. The guests of this lab sit on the node-local `local-lvm`,
+so they cannot move as they are - Proxmox refuses:
 
 ```bash
-qm migrate 100 pve2 --online
+qm migrate 9201 pve2 --online
+# can't migrate VM 9201 - local storage can't be used for live migration
+```
+
+To see a live migration, put the guest on the shared storage first:
+
+```bash
+qm set 9201 --scsi0 nfs-lab:9201/vm-9201-disk-0.raw
+qm migrate 9201 pve2 --online
 pvecm status
 qm list
 ```
 
 The downtime is well under a second. This is the exercise that proves why `nfs-lab`
-exists.
+exists - and it is the reason the templates live on `local-lvm` (they have to support
+snapshots) while the guests that need to move live on `nfs-lab`.
 
 ### Exercise: containers
 
@@ -165,9 +195,9 @@ cat /proc/1/cgroup
 ### Exercise: virtIO and the guest agent
 
 ```bash
-qm set 100 --agent enabled=1,fstrim_cloned_disks=1
-qm guest cmd 100 ping
-qm guest exec 100 -- ip a
+qm set 9201 --agent enabled=1,fstrim_cloned_disks=1
+qm guest cmd 9201 ping
+qm guest exec 9201 -- ip a
 ```
 
 ---
@@ -177,7 +207,7 @@ qm guest exec 100 -- ip a
 ### Exercise: backup to Proxmox Backup Server
 
 ```bash
-vzdump 100 --storage pbs-main --mode snapshot
+vzdump 9201 --storage pbs-main --mode snapshot
 vzdump 300 --storage pbs-main --mode snapshot
 
 pvesm list pbs-main --content backup
@@ -186,7 +216,7 @@ pvesm list pbs-main --content backup
 Restore into a new VM:
 
 ```bash
-qmrestore pbs-main:backup/vm/100/2026-11-10T02:00:00Z 130 --storage nfs-lab
+qmrestore pbs-main:backup/vm/9201/2026-11-10T02:00:00Z 130 --storage nfs-lab
 qm start 130
 ```
 
@@ -194,19 +224,28 @@ qm start 130
 
 ```bash
 pvesh get /cluster/backup
-pvesh create /cluster/backup --storage pbs-main --vmid 100 --schedule 'daily' \
+pvesh create /cluster/backup --storage pbs-main --vmid 9201 --schedule 'daily' \
     --mode snapshot --enabled 1 --retention-keep-daily 7
 ```
 
 ### Exercise: high availability
 
 ```bash
-ha-manager add vm:100 --group prod-nodes --max_restart 3 --max_relocate 2
+ha-manager add vm:9201 --group prod-nodes --max_restart 3 --max_relocate 2
 ha-manager status
 ```
 
-HA needs shared storage. VM 100 is on `nfs-lab`, so it qualifies. To see the failure
-handling:
+HA needs shared storage, because the resource has to be able to move to another node.
+The guests of this lab sit on the node-local `local-lvm`, so a guest has to be moved to
+`nfs-lab` before it can join an HA group:
+
+```bash
+qm set 9201 --scsi0 nfs-lab:9201/vm-9201-disk-0.raw
+ha-manager add vm:9201 --group prod-nodes --max_restart 3 --max_relocate 2
+ha-manager status
+```
+
+To see the failure handling:
 
 ```bash
 aws ec2 stop-instances --instance-ids <pve2-instance-id>
@@ -224,7 +263,7 @@ pvesh get /cluster/log --limit 50
 ### Exercise: troubleshooting - guest or host?
 
 ```bash
-qm status 100 && qm showcmd 100
+qm status 9201 && qm showcmd 9201
 journalctl -u pve-container@300 -f
 pvesm status
 dmesg -T | tail -50
@@ -253,7 +292,7 @@ in the order they happen:
 | VMware concept | Proxmox equivalent | In this lab |
 |---|---|---|
 | vSwitch / Distributed vSwitch | Linux bridge (`vmbr0`) | `vmbr0` on every node |
-| Port group | Bridge + VLAN tag on the NIC | `qm set 100 --net0 virtio,bridge=vmbr0,tag=20` |
+| Port group | Bridge + VLAN tag on the NIC | `qm set 9201 --net0 virtio,bridge=vmbr0,tag=20` |
 | Trunk port group | VLAN-aware bridge | `bridge-vlan-aware yes` |
 | VMkernel port | Host IP on the bridge or a separate interface | Host IP on `eth0` |
 | dvUplink / NIC teaming | Bond (`bond0`) as a bridge port | Not available - see below |
@@ -262,19 +301,19 @@ in the order they happen:
 
 ```bash
 # Boot
-qm status 100
+qm status 9201
 # Reboot
-qm reboot 100
+qm reboot 9201
 # Shutdown
-qm shutdown 100
+qm shutdown 9201
 # Network
-qm guest exec 100 -- ip a
+qm guest exec 9201 -- ip a
 # Storage
-qm guest exec 100 -- lsblk
+qm guest exec 9201 -- lsblk
 # Agent
-qm guest cmd 100 ping
+qm guest cmd 9201 ping
 # Snapshot
-qm snapshot 100 post-migration-test && qm rollback 100 post-migration-test
+qm snapshot 9201 post-migration-test && qm rollback 9201 post-migration-test
 ```
 
 ### Verification script (migration day 2, appendix B)
@@ -322,11 +361,11 @@ pveum realm modify ad-corp --tfa type=oath,digits=6,step=30
 ```bash
 # 3. A narrow custom role
 pveum role add VM-Operator -privs "VM.Console,VM.PowerMgmt,VM.Monitor"
-pveum acl modify /vms/100 --users jsmith@ad-corp --roles VM-Operator
+pveum acl modify /vms/9201 --users jsmith@ad-corp --roles VM-Operator
 
 # 4. A privilege-separated API token with its own ACL
 pveum user token add automation@pve terraform --privsep 1
-pveum acl modify /vms/100 --tokens 'automation@pve!terraform' --roles VM-Operator
+pveum acl modify /vms/9201 --tokens 'automation@pve!terraform' --roles VM-Operator
 ```
 
 ```bash
@@ -371,11 +410,11 @@ pvesh create /cluster/firewall/rules --action ACCEPT --type in \
 
 ```bash
 # 2. Per-workload firewall
-pvesh create /nodes/pve1/qemu/100/firewall/rules \
+pvesh create /nodes/pve1/qemu/9201/firewall/rules \
     --action ACCEPT --type in --dport 443 --proto tcp --source 10.10.10.0/24
 
 # 3. Segmentation with a VLAN tag
-qm set 100 --net0 virtio,bridge=vmbr0,tag=30
+qm set 9201 --net0 virtio,bridge=vmbr0,tag=30
 bridge vlan show
 
 # 4. An SDN zone

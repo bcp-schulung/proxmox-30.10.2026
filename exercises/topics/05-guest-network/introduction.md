@@ -10,7 +10,7 @@
 ## 1. What you learn
 
 Proxmox networking is Linux networking. A `vmbr0` is an ordinary Linux
-bridge, a `tap100i0` is an ordinary tap device, and a container's `eth0` is
+bridge, a `tap9201i0` is an ordinary tap device, and a container's `eth0` is
 an ordinary veth pair. Nothing about it is magic - which is exactly why you
 can reason about it with `ip`, `bridge` and `tcpdump`.
 
@@ -23,8 +23,8 @@ can reason about it with `ip`, `bridge` and `tcpdump`.
       │
       └── vmbr0 (10.10.10.1)  the guest overlay
             │
-            ├── tap100i0   VM 100
-            ├── tap101i0   VM 101
+            ├── tap9201i0   VM 9201
+            ├── tap9202i0   VM 9202
             └── veth300i0  CT 300
 ```
 

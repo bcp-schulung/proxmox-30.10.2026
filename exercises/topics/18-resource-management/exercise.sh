@@ -32,10 +32,10 @@ case "${EX_MODE}" in
 esac
 
 cfg="$(ex_vm_config 100)"
-ex_assert_not_empty "VM 100 exists" "${cfg}"
+ex_assert_not_empty "VM 9201 exists" "${cfg}"
 
 if [ -z "${cfg}" ]; then
-    ex_error "VM 100 does not exist - the rest of the checks cannot run."
+    ex_error "VM 9201 does not exist - the rest of the checks cannot run."
     ex_summary
     exit $?
 fi
@@ -45,26 +45,26 @@ fi
 # =============================================================================
 ex_section "The CPU"
 
-sockets="$(ex_out "qm config 100 2>/dev/null | grep '^sockets:' | tr -s ' ' | cut -d' ' -f2")"
-ex_assert_eq "VM 100 has 1 socket" "1" "${sockets}"
+sockets="$(ex_out "qm config 9201 2>/dev/null | grep '^sockets:' | tr -s ' ' | cut -d' ' -f2")"
+ex_assert_eq "VM 9201 has 1 socket" "1" "${sockets}"
 
-cores="$(ex_out "qm config 100 2>/dev/null | grep '^cores:' | tr -s ' ' | cut -d' ' -f2")"
-ex_assert_eq "VM 100 has 2 cores" "2" "${cores}"
+cores="$(ex_out "qm config 9201 2>/dev/null | grep '^cores:' | tr -s ' ' | cut -d' ' -f2")"
+ex_assert_eq "VM 9201 has 2 cores" "2" "${cores}"
 
-cpulimit="$(ex_out "qm config 100 2>/dev/null | grep '^cpulimit:' | tr -s ' ' | cut -d' ' -f2")"
+cpulimit="$(ex_out "qm config 9201 2>/dev/null | grep '^cpulimit:' | tr -s ' ' | cut -d' ' -f2")"
 case "${cpulimit}" in
-    ''|*[!0-9]*) ex_fail "VM 100 has a CPU limit" ;;
-    0)           ex_fail "VM 100 has a CPU limit (it is unlimited)" ;;
-    *)           ex_pass "VM 100 has a CPU limit (${cpulimit})" ;;
+    ''|*[!0-9]*) ex_fail "VM 9201 has a CPU limit" ;;
+    0)           ex_fail "VM 9201 has a CPU limit (it is unlimited)" ;;
+    *)           ex_pass "VM 9201 has a CPU limit (${cpulimit})" ;;
 esac
 
-cpuunits="$(ex_out "qm config 100 2>/dev/null | grep '^cpuunits:' | tr -s ' ' | cut -d' ' -f2")"
+cpuunits="$(ex_out "qm config 9201 2>/dev/null | grep '^cpuunits:' | tr -s ' ' | cut -d' ' -f2")"
 case "${cpuunits}" in
-    ''|*[!0-9]*) ex_fail "VM 100 has a CPU weight" ;;
-    *)           ex_pass "VM 100 has a CPU weight (${cpuunits})" ;;
+    ''|*[!0-9]*) ex_fail "VM 9201 has a CPU weight" ;;
+    *)           ex_pass "VM 9201 has a CPU weight (${cpuunits})" ;;
 esac
 
-cpu="$(ex_out "qm config 100 2>/dev/null | grep '^cpu:'")"
+cpu="$(ex_out "qm config 9201 2>/dev/null | grep '^cpu:'")"
 if [ -n "${cpu}" ]; then
     if printf '%s' "${cpu}" | grep -q 'host'; then
         ex_fail "the CPU type is portable between the nodes (it is 'host')"
@@ -80,20 +80,20 @@ fi
 # =============================================================================
 ex_section "The memory"
 
-memory="$(ex_out "qm config 100 2>/dev/null | grep '^memory:' | tr -s ' ' | cut -d' ' -f2")"
+memory="$(ex_out "qm config 9201 2>/dev/null | grep '^memory:' | tr -s ' ' | cut -d' ' -f2")"
 case "${memory}" in
-    ''|*[!0-9]*) ex_fail "VM 100 has a memory limit" ;;
-    0)           ex_fail "VM 100 has a memory limit" ;;
-    *)           ex_pass "VM 100 has a memory limit (${memory} MB)" ;;
+    ''|*[!0-9]*) ex_fail "VM 9201 has a memory limit" ;;
+    0)           ex_fail "VM 9201 has a memory limit" ;;
+    *)           ex_pass "VM 9201 has a memory limit (${memory} MB)" ;;
 esac
 
-balloon="$(ex_out "qm config 100 2>/dev/null | grep '^balloon:' | tr -s ' ' | cut -d' ' -f2")"
+balloon="$(ex_out "qm config 9201 2>/dev/null | grep '^balloon:' | tr -s ' ' | cut -d' ' -f2")"
 case "${balloon}" in
     ''|*[!0-9]*)
-        ex_fail "VM 100 has a balloon value"
+        ex_fail "VM 9201 has a balloon value"
         ;;
     0)
-        ex_fail "VM 100 has a balloon value (it is disabled)"
+        ex_fail "VM 9201 has a balloon value (it is disabled)"
         ;;
     *)
         if [ -n "${memory}" ] && [ "${balloon}" -lt "${memory}" ]; then
@@ -116,7 +116,7 @@ esac
 # =============================================================================
 ex_section "The disk"
 
-scsi0="$(ex_out "qm config 100 2>/dev/null | grep '^scsi0:'")"
+scsi0="$(ex_out "qm config 9201 2>/dev/null | grep '^scsi0:'")"
 ex_assert_contains "the disk is on the shared storage" "${scsi0}" "nfs-lab"
 ex_assert_contains "the disk has discard enabled" "${scsi0}" "discard=on"
 ex_assert_contains "the disk has an iothread" "${scsi0}" "iothread=1"

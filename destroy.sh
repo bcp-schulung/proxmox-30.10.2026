@@ -462,6 +462,21 @@ the state file, the generated .env and the diagnostic reports"
         fi
     fi
 
+    # The dry run must not change anything. The teardown helpers are
+    # called directly and not through the 'run' wrapper, so they have
+    # to be skipped explicitly.
+    if [ "${DRY_RUN}" = "1" ]; then
+        printf '%s  [dry-run] the guests would be destroyed%s\n' "${C_DIM}" "${C_RESET}"
+        printf '%s  [dry-run] the cluster configuration would be reset%s\n' "${C_DIM}" "${C_RESET}"
+        printf '%s  [dry-run] the EC2 instances would be terminated%s\n' "${C_DIM}" "${C_RESET}"
+        printf '%s  [dry-run] the EBS volumes would be deleted%s\n' "${C_DIM}" "${C_RESET}"
+        printf '%s  [dry-run] the network resources would be deleted%s\n' "${C_DIM}" "${C_RESET}"
+        printf '%s  [dry-run] the AMIs and the key pair would be deleted%s\n' "${C_DIM}" "${C_RESET}"
+        printf '%s  [dry-run] the state file and .env would be removed%s\n' "${C_DIM}" "${C_RESET}"
+        print_banner "Dry run finished - nothing was changed"
+        return 0
+    fi
+
     destroy_cluster
     destroy_instances
     destroy_volumes

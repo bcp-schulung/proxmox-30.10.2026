@@ -52,17 +52,17 @@ NW_STORAGE_BACKUP="pbs-main"     # backup target
 # HA). The application tier and the database tier are containers: they are
 # Linux-only, they are trusted and they want a high density.
 #
-NW_VM_IDS="100 101"                          # web tier
-NW_VM_NAMES="web01 web02"
-NW_VM_TEMPLATE_ID="9000"
-NW_VM_TEMPLATE_NAME="debian13-template"
-NW_VM_TEST_ID="102"
-NW_VM_TEST_NAME="web-test"
+NW_VM_IDS="9201 9202"                        # web tier
+NW_VM_NAMES="debian13-run-pve1 debian13-run-pve2"
+NW_VM_TEMPLATE_ID="9101"
+NW_VM_TEMPLATE_NAME="debian13-tpl-pve1"
+NW_VM_TEST_ID="9203"
+NW_VM_TEST_NAME="debian13-run-pve3"
 
 NW_CT_IDS="300 301 302"
 NW_CT_NAMES="app01 db01 cache01"
 
-NW_WEB_VM_ID="100"
+NW_WEB_VM_ID="9201"
 NW_APP_CT_ID="300"
 NW_DB_CT_ID="301"
 NW_CACHE_CT_ID="302"

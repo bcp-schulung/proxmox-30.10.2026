@@ -56,7 +56,7 @@ jobs="$(ex_out "pvesh get /cluster/backup --output-format json 2>/dev/null")"
 ex_assert_not_empty "a backup job exists" "${jobs}"
 
 ex_assert_contains "the job targets pbs-main" "${jobs}" "pbs-main"
-ex_assert_contains "the job covers VM 100" "${jobs}" "100"
+ex_assert_contains "the job covers VM 9201" "${jobs}" "100"
 ex_assert_contains "the job covers CT 301" "${jobs}" "301"
 ex_assert_contains "the job runs in snapshot mode" "${jobs}" "snapshot"
 ex_assert_contains "the job is enabled" "${jobs}" "\"enabled\":1"
@@ -72,7 +72,7 @@ ex_assert_contains "the retention keeps 6 monthly backups" "${jobs}" "\"keep-mon
 ex_section "The backups in the datastore"
 
 backups="$(ex_out "pvesm list pbs-main --content backup 2>/dev/null")"
-ex_assert_contains "a backup of VM 100 exists" "${backups}" "vm/100"
+ex_assert_contains "a backup of VM 9201 exists" "${backups}" "vm/100"
 ex_assert_contains "a backup of CT 301 exists" "${backups}" "lxc/301"
 
 # =============================================================================

@@ -6,14 +6,14 @@
 
 ## The precondition
 
-- [ ] VM 100 is running.
-- [ ] VM 100 is on the shared storage `nfs-lab` - a migration of a guest on
+- [ ] VM 9201 is running.
+- [ ] VM 9201 is on the shared storage `nfs-lab` - a migration of a guest on
       a local disk is refused by Proxmox, and this is why.
 
 ## The migration
 
-- [ ] VM 100 runs on `pve2` after the migration.
-- [ ] VM 100 is still running.
+- [ ] VM 9201 runs on `pve2` after the migration.
+- [ ] VM 9201 is still running.
 - [ ] The guest agent answers after the migration.
 - [ ] The guest's uptime was **not** reset - the guest kept running through
       the move.
@@ -35,7 +35,7 @@ carries over.
 The verification reads the uptime from the guest itself:
 
 ```bash
-qm guest exec 100 -- cat /proc/uptime
+qm guest exec 9201 -- cat /proc/uptime
 ```
 
 **The quorate check** is there because a migration is a cluster operation.

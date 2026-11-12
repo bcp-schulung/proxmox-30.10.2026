@@ -4,12 +4,12 @@
 
 ---
 
-## The VM 100
+## The VM 9201
 
-- [ ] VM 100 exists.
-- [ ] It is named `web01`.
-- [ ] It is a **full** clone of the template 9000 (its disk is
-      `vm-100-disk-0`, not `base-9000-disk-0`).
+- [ ] VM 9201 exists.
+- [ ] It is named `debian13-run-pve1`.
+- [ ] It is a **full** clone of the template 9101 (its disk is
+      `vm-9201-disk-0`, not `base-9101-disk-0`).
 - [ ] It is on the shared storage `nfs-lab`.
 - [ ] It has 2 vCPU.
 - [ ] It has 4096 MB of memory.
@@ -19,14 +19,14 @@
 - [ ] The disk has `discard=on` and `iothread=1`.
 - [ ] The guest agent is enabled.
 - [ ] It has its own cloud-init drive.
-- [ ] The cloud-init drive names the guest `web01`.
+- [ ] The cloud-init drive names the guest `debian13-run-pve1`.
 - [ ] It is running.
 
 ## The guest agent
 
-- [ ] `qm guest cmd 100 ping` answers.
+- [ ] `qm guest cmd 9201 ping` answers.
 - [ ] The guest agent is active inside the guest.
-- [ ] The guest reports a hostname of `web01`.
+- [ ] The guest reports a hostname of `debian13-run-pve1`.
 - [ ] The guest has an address on the overlay network.
 
 ## The lifecycle
@@ -42,7 +42,7 @@
 **The cloud-init hostname check is the one that catches the clone trap.** A
 clone inherits the template's cloud-init drive. If the student cloned the
 template and forgot to replace the drive, the guest boots as
-`debian13-template` - and everything else works fine, which is why the bug
+`debian13-tpl-pve1` - and everything else works fine, which is why the bug
 survives a casual test.
 
 **The "can be shut down cleanly" check** proves the guest agent works. A

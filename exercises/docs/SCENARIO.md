@@ -61,10 +61,12 @@ Cluster "prod-cluster"          3 nodes, quorate
 │   └── pbs-main                 backup target, PBS
 │
 ├── Guests
-│   ├── VM  9000  debian13-template   template, on nfs-lab
-│   ├── VM  100   web01                web tier,    VLAN 20, HA managed
-│   ├── VM  101   web02                web tier,    VLAN 20, HA managed
-│   ├── VM  102   web-test             linked clone, VLAN 20, test only
+│   ├── VM  9101  debian13-tpl-pve1   template, on pve1's local-lvm
+│   ├── VM  9102  debian13-tpl-pve2   template, on pve2's local-lvm
+│   ├── VM  9103  debian13-tpl-pve3   template, on pve3's local-lvm
+│   ├── VM  9201   debian13-run-pve1                web tier,    VLAN 20, HA managed
+│   ├── VM  9202   debian13-run-pve2                web tier,    VLAN 20, HA managed
+│   ├── VM  9203   debian13-run-pve3             full clone,  VLAN 20, test only
 │   ├── CT  300   app01                app tier,    VLAN 30
 │   ├── CT  301   db01                 db tier,     VLAN 40
 │   └── CT  302   cache01              app tier,    VLAN 30
@@ -133,12 +135,12 @@ the steps:
 | 3 | Storage | `local-lvm`, `nfs-lab`, `pbs-main` |
 | 4 | Networking | `vmbr0`, VLAN aware, DHCP, routing between the nodes |
 | 5 | Identity | realm, user, role, ACL, API token |
-| 6 | The golden image | template `9000` |
-| 7 | The web tier | VM 100 + 101, full clones, agent enabled |
+| 6 | The golden image | template `9101` |
+| 7 | The web tier | VM 9201 + 9202, full clones, agent enabled |
 | 8 | The container tiers | CT 300, 301, 302 |
-| 9 | Cloning and testing | VM 102, linked clone |
+| 9 | Cloning and testing | VM 9203, linked clone |
 | 10 | Snapshots | snapshot, change, rollback |
-| 11 | Live migration | VM 100 to another node |
+| 11 | Live migration | VM 9201 to another node |
 | 12 | Segmentation | VLAN tags per tier, firewall rules |
 | 13 | Backup | backup job, retention, restore |
 | 14 | High availability | HA group, HA managed guests |

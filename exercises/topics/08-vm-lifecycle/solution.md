@@ -9,7 +9,7 @@
 ## 1. Clone the template
 
 ```bash
-qm clone 9000 100 --name web01 --full --storage nfs-lab
+qm clone 9101 9201 --name debian13-run-pve1 --full --storage nfs-lab
 ```
 
 `--full` is the default, but write it explicitly - the difference between a
@@ -19,23 +19,23 @@ command, and it should be obvious in the command line.
 Verify:
 
 ```bash
-qm config 100 | grep scsi0
-# scsi0: nfs-lab:vm-100-disk-0,size=32G
+qm config 9201 | grep scsi0
+# scsi0: nfs-lab:vm-9201-disk-0,size=32G
 ```
 
-A linked clone would show `base-9000-disk-0` here.
+A linked clone would show `base-9101-disk-0` here.
 
 ## 2. Configure it
 
 ```bash
-qm set 100 \
-  --name web01 \
+qm set 9201 \
+  --name debian13-run-pve1 \
   --cores 2 \
   --sockets 1 \
   --memory 4096 \
   --net0 virtio,bridge=vmbr0,tag=20 \
   --scsihw virtio-scsi-single \
-  --scsi0 nfs-lab:vm-100-disk-0,discard=on,iothread=1 \
+  --scsi0 nfs-lab:vm-9201-disk-0,discard=on,iothread=1 \
   --agent "enabled=1,fstrim_cloned_disks=1" \
   --machine q35 \
   --bios ovmf \
@@ -48,7 +48,7 @@ qm set 100 \
 the firewall work with:
 
 ```bash
-qm config 100 | grep net0
+qm config 9201 | grep net0
 # net0: virtio=BC:76:4E:xx:xx:xx,bridge=vmbr0,tag=20
 ```
 
@@ -62,10 +62,10 @@ qm config 100 | grep net0
 ## 3. The cloud-init drive
 
 ```bash
-cat > /tmp/ci-100.yaml << EOF
+cat > /tmp/ci-9201.yaml << EOF
 #cloud-config
-hostname: web01
-fqdn: web01.nordwind.example.com
+hostname: debian13-run-pve1
+fqdn: debian13-run-pve1.nordwind.example.com
 manage_etc_hosts: true
 ssh_pwauth: true
 chpasswd:
@@ -80,10 +80,10 @@ runcmd:
   - [ systemctl, enable, --now, qemu-guest-agent ]
 EOF
 
-qm set 100 \
+qm set 9201 \
   --ide2 local:cloudinit \
   --ipconfig0 ip=dhcp \
-  --cicustom local:/tmp/ci-100.yaml
+  --cicustom local:/tmp/ci-9201.yaml
 ```
 
 ### Why all three options
@@ -106,40 +106,40 @@ the setting is stored and the drive is never created.
 ## 4. Start and verify
 
 ```bash
-qm start 100
+qm start 9201
 
 # The agent needs about 30 seconds
 for i in $(seq 1 30); do
-    qm guest cmd 100 ping >/dev/null 2>&1 && break
+    qm guest cmd 9201 ping >/dev/null 2>&1 && break
     sleep 5
 done
 
-qm guest cmd 100 ping
-qm guest exec 100 -- hostname
-qm guest exec 100 -- ip -brief a
-qm guest exec 100 -- systemctl is-active qemu-guest-agent
+qm guest cmd 9201 ping
+qm guest exec 9201 -- hostname
+qm guest exec 9201 -- ip -brief a
+qm guest exec 9201 -- systemctl is-active qemu-guest-agent
 ```
 
 Expected:
 
 ```
-web01
-eth0    UP    10.10.10.101/24
+debian13-run-pve1
+eth0    UP    10.10.10.102/24
 active
 ```
 
 ## 5. The snapshot cycle
 
 ```bash
-qm snapshot 100 pre-update --description "before the Nordwind release"
+qm snapshot 9201 pre-update --description "before the Nordwind release"
 
-qm guest exec 100 -- sh -c 'echo "release-2.4" > /etc/nordwind-version'
-qm guest exec 100 -- cat /etc/nordwind-version
+qm guest exec 9201 -- sh -c 'echo "release-2.4" > /etc/nordwind-version'
+qm guest exec 9201 -- cat /etc/nordwind-version
 # release-2.4
 
-qm rollback 100 pre-update
+qm rollback 9201 pre-update
 
-qm guest exec 100 -- cat /etc/nordwind-version
+qm guest exec 9201 -- cat /etc/nordwind-version
 # cat: /etc/nordwind-version: No such file or directory
 ```
 
@@ -148,37 +148,37 @@ the snapshot includes the memory state, so the rollback restores a *running*
 guest rather than a stopped one.
 
 ```bash
-qm delsnapshot 100 pre-update
+qm delsnapshot 9201 pre-update
 ```
 
 ### The configuration changes that need a stopped guest
 
 ```bash
-qm set 100 --cores 4        # applied live
-qm set 100 --cpu host       # applied live
-qm set 100 --scsihw virtio-scsi-pci   # needs a restart
-qm resize 100 scsi0 +20G    # needs a restart, or a hotplug
+qm set 9201 --cores 4        # applied live
+qm set 9201 --cpu host       # applied live
+qm set 9201 --scsihw virtio-scsi-pci   # needs a restart
+qm resize 9201 scsi0 +20G    # needs a restart, or a hotplug
 ```
 
 Proxmox tells you which is which:
 
 ```
-# qm set 100 --scsihw virtio-scsi-pci
+# qm set 9201 --scsihw virtio-scsi-pci
 unable to set scsihw: "virtio-scsi-pci" is not supported in the current configuration
 ```
 
 and the pending mechanism:
 
 ```bash
-qm set 100 --scsihw virtio-scsi-pci --pending 1
-qm pending 100
+qm set 9201 --scsihw virtio-scsi-pci --pending 1
+qm pending 9201
 ```
 
 ## 6. The clean shutdown
 
 ```bash
-qm shutdown 100 --timeout 60
-qm status 100
+qm shutdown 9201 --timeout 60
+qm status 9201
 # status: stopped
 ```
 
@@ -187,28 +187,28 @@ many guests ignore. Then `qm shutdown --forceStop 1` cuts the power after
 the timeout.
 
 ```bash
-qm start 100
-qm guest cmd 100 ping
+qm start 9201
+qm guest cmd 9201 ping
 ```
 
 ## 7. The complete sequence
 
 ```bash
 # The clone
-qm clone 9000 100 --name web01 --full --storage nfs-lab
+qm clone 9101 9201 --name debian13-run-pve1 --full --storage nfs-lab
 
 # The configuration
-qm set 100 --cores 2 --sockets 1 --memory 4096 \
+qm set 9201 --cores 2 --sockets 1 --memory 4096 \
   --net0 virtio,bridge=vmbr0,tag=20 \
   --scsihw virtio-scsi-single \
-  --scsi0 nfs-lab:vm-100-disk-0,discard=on,iothread=1 \
+  --scsi0 nfs-lab:vm-9201-disk-0,discard=on,iothread=1 \
   --agent "enabled=1,fstrim_cloned_disks=1" \
   --machine q35 --bios ovmf --onboot 1
 
 # The cloud-init
-cat > /tmp/ci-100.yaml << EOF
+cat > /tmp/ci-9201.yaml << EOF
 #cloud-config
-hostname: web01
+hostname: debian13-run-pve1
 manage_etc_hosts: true
 ssh_pwauth: true
 chpasswd:
@@ -222,26 +222,26 @@ packages:
 runcmd:
   - [ systemctl, enable, --now, qemu-guest-agent ]
 EOF
-qm set 100 --ide2 local:cloudinit --ipconfig0 ip=dhcp --cicustom local:/tmp/ci-100.yaml
+qm set 9201 --ide2 local:cloudinit --ipconfig0 ip=dhcp --cicustom local:/tmp/ci-9201.yaml
 
 # Start and verify
-qm start 100
-qm guest cmd 100 ping
-qm guest exec 100 -- hostname
+qm start 9201
+qm guest cmd 9201 ping
+qm guest exec 9201 -- hostname
 
 # The lifecycle
-qm shutdown 100 --timeout 60
-qm start 100
+qm shutdown 9201 --timeout 60
+qm start 9201
 ```
 
 ## 8. The common mistakes
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| The guest has the template's hostname | The cloud-init drive was not replaced | `qm set 100 --ide2 local:cloudinit --cicustom local:/tmp/ci-100.yaml` and reboot |
-| The guest has no address | `--ipconfig0` is missing | `qm set 100 --ipconfig0 ip=dhcp` |
-| `qm guest cmd` times out | The agent is not installed or not running | `qm guest exec 100 -- systemctl status qemu-guest-agent` |
+| The guest has the template's hostname | The cloud-init drive was not replaced | `qm set 9201 --ide2 local:cloudinit --cicustom local:/tmp/ci-9201.yaml` and reboot |
+| The guest has no address | `--ipconfig0` is missing | `qm set 9201 --ipconfig0 ip=dhcp` |
+| `qm guest cmd` times out | The agent is not installed or not running | `qm guest exec 9201 -- systemctl status qemu-guest-agent` |
 | `qm shutdown` does nothing | No agent and no ACPI support | `qm shutdown --forceStop 1` |
-| The disk grows forever | `discard=on` is missing | `qm set 100 --scsi0 ...,discard=on` |
+| The disk grows forever | `discard=on` is missing | `qm set 9201 --scsi0 ...,discard=on` |
 | `qm set --scsihw` is refused | The change needs a stopped guest | `--pending 1` and a restart |
 | The guest is slow after an I/O burst | One disk blocks the others | `iothread=1` |

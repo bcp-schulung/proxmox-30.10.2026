@@ -87,8 +87,8 @@ The `qm list` output:
 
 ```
       VMID NAME                 STATUS     MEM(MB)    BOOTDISK(GB) PID
-       100 web01                running    4096              32.00 1234
-       101 web02                running    4096              32.00 2345
+       9201 debian13-run-pve1               running    4096              32.00 1234
+       9202 debian13-run-pve2               running    4096              32.00 2345
 ```
 
 The `pvesh` output carries the same information in JSON, plus the fields the
@@ -156,7 +156,7 @@ it is about to make has already been made on another node.
 
 ```bash
 # The command line Proxmox would use
-qm showcmd 100
+qm showcmd 9201
 
 # The process that is actually running
 ps aux | grep '[k]vm'
@@ -207,7 +207,7 @@ echo "demo" > /etc/pve/cluster-demo.txt
 rm /etc/pve/cluster-demo.txt
 
 # The QEMU process
-qm showcmd 100
+qm showcmd 9201
 ps aux | grep '[k]vm'
 ```
 

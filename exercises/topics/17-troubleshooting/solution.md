@@ -13,20 +13,20 @@ symptom: the host cannot talk to the guest any more, but the guest is
 running perfectly.
 
 ```bash
-qm guest exec 100 -- systemctl stop qemu-guest-agent
+qm guest exec 9201 -- systemctl stop qemu-guest-agent
 ```
 
 The symptom from the host:
 
 ```bash
-qm guest cmd 100 ping
-# VM 100 qemu-guest-agent is not running
+qm guest cmd 9201 ping
+# VM 9201 qemu-guest-agent is not running
 ```
 
 ## 2. Preserve the evidence - FIRST
 
 ```bash
-qm snapshot 100 incident --description "guest agent not responding - before the diagnosis"
+qm snapshot 9201 incident --description "guest agent not responding - before the diagnosis"
 ```
 
 > **Do this before you diagnose.** A repair can overwrite the evidence. The
@@ -37,7 +37,7 @@ qm snapshot 100 incident --description "guest agent not responding - before the 
 ### Step 1: guest or host?
 
 ```bash
-qm status 100
+qm status 9201
 # status: running
 ```
 
@@ -61,8 +61,8 @@ The host is healthy. The problem is in the guest.
 ### Step 2: VM or CT?
 
 ```bash
-qm status 100
-qm showcmd 100 | head -5
+qm status 9201
+qm showcmd 9201 | head -5
 ```
 
 The QEMU process is running with the right devices.
@@ -70,8 +70,8 @@ The QEMU process is running with the right devices.
 ### Step 3: the guest agent
 
 ```bash
-qm guest cmd 100 ping
-# VM 100 qemu-guest-agent is not running
+qm guest cmd 9201 ping
+# VM 9201 qemu-guest-agent is not running
 ```
 
 That is the diagnosis: the guest agent is stopped. The guest itself is
@@ -83,15 +83,15 @@ When the agent does not answer, you cannot use `qm guest exec`. Use the
 console:
 
 ```bash
-qm console 100
+qm console 9201
 # press escape twice to get to the login prompt
 ```
 
 Or check the QEMU log:
 
 ```bash
-qm guest cmd 100 ping
-qm set 100 --delete agent       # not a fix - a way to test
+qm guest cmd 9201 ping
+qm set 9201 --delete agent       # not a fix - a way to test
 ```
 
 ### The host log, for completeness
@@ -107,14 +107,14 @@ Nothing relevant on the host - which confirms the diagnosis.
 
 ```bash
 # The agent is stopped - start it again
-qm guest exec 100 -- systemctl start qemu-guest-agent
+qm guest exec 9201 -- systemctl start qemu-guest-agent
 ```
 
 If the agent itself does not answer, you cannot run `qm guest exec`. Use the
 console instead:
 
 ```bash
-qm console 100
+qm console 9201
 # login, then:
 systemctl start qemu-guest-agent
 ```
@@ -122,44 +122,44 @@ systemctl start qemu-guest-agent
 Or reboot the guest:
 
 ```bash
-qm reboot 100
+qm reboot 9201
 ```
 
 ## 5. Verify
 
 ```bash
-qm guest cmd 100 ping
+qm guest cmd 9201 ping
 # pong
 
-qm guest exec 100 -- systemctl is-active qemu-guest-agent
+qm guest exec 9201 -- systemctl is-active qemu-guest-agent
 # active
 
-qm guest exec 100 -- hostname
-qm guest exec 100 -- systemctl --failed --no-legend
+qm guest exec 9201 -- hostname
+qm guest exec 9201 -- systemctl --failed --no-legend
 ```
 
 ## 6. Document it
 
 ```bash
 pvesh get /cluster/log --limit 100 --output-format json | \
-  jq -r '.[] | select(.cmd | test("vms/100")) | "\(.time | strftime("%Y-%m-%d %H:%M:%S")) \(.username) \(.cmd)"'
+  jq -r '.[] | select(.cmd | test("vms/9201")) | "\(.time | strftime("%Y-%m-%d %H:%M:%S")) \(.username) \(.cmd)"'
 ```
 
 ```
-2026-11-10 10:02:11 root@pam qm snapshot 100 incident --description guest agent not responding
-2026-11-10 10:05:44 root@pam qm guest exec 100 -- systemctl start qemu-guest-agent
+2026-11-10 10:02:11 root@pam qm snapshot 9201 incident --description guest agent not responding
+2026-11-10 10:05:44 root@pam qm guest exec 9201 -- systemctl start qemu-guest-agent
 ```
 
 ### The write-up
 
 ```
-Incident: the guest agent of web01 (VM 100) stopped responding
+Incident: the guest agent of debian13-run-pve1 (VM 9201) stopped responding
 Layer:    guest (the host services, the storage and the cluster were healthy)
 Evidence: the snapshot 'incident', taken before the repair
-Diagnosis: qm guest cmd 100 ping failed, qm status 100 showed 'running',
+Diagnosis: qm guest cmd 9201 ping failed, qm status 9201 showed 'running',
            the host services were all active -> the fault was inside the guest
 Fix:      systemctl start qemu-guest-agent inside the guest
-Result:   qm guest cmd 100 ping answers again
+Result:   qm guest cmd 9201 ping answers again
 ```
 
 ## 7. The other scenarios
@@ -167,10 +167,10 @@ Result:   qm guest cmd 100 ping answers again
 ### The guest does not boot
 
 ```bash
-qm status 100                     # stopped
-qm config 100 | grep '^boot:'     # order=scsi0
-qm showcmd 100 | head -5
-qm console 100                    # what does the console show?
+qm status 9201                     # stopped
+qm config 9201 | grep '^boot:'     # order=scsi0
+qm showcmd 9201 | head -5
+qm console 9201                    # what does the console show?
 ```
 
 | The console shows | The cause |
@@ -183,9 +183,9 @@ qm console 100                    # what does the console show?
 ### The guest has no network
 
 ```bash
-qm guest exec 100 -- ip -brief a
-qm guest exec 100 -- ip route
-qm guest exec 100 -- cat /etc/resolv.conf
+qm guest exec 9201 -- ip -brief a
+qm guest exec 9201 -- ip route
+qm guest exec 9201 -- cat /etc/resolv.conf
 ```
 
 ```bash
@@ -222,7 +222,7 @@ broken" cause in a cluster.
 ### The migration is refused
 
 ```bash
-qm config 100 | grep scsi0
+qm config 9201 | grep scsi0
 ```
 
 ```
@@ -260,27 +260,27 @@ The disk is on `local-lvm`. Move it to the shared storage.
 
 ```bash
 # Break it
-qm guest exec 100 -- systemctl stop qemu-guest-agent
+qm guest exec 9201 -- systemctl stop qemu-guest-agent
 
 # Preserve
-qm snapshot 100 incident --description "guest agent not responding - before the diagnosis"
+qm snapshot 9201 incident --description "guest agent not responding - before the diagnosis"
 
 # Diagnose
-qm status 100
+qm status 9201
 systemctl is-active pveproxy pvedaemon pvestatd
 pvesm status
-qm guest cmd 100 ping
+qm guest cmd 9201 ping
 
 # Repair
-qm guest exec 100 -- systemctl start qemu-guest-agent
+qm guest exec 9201 -- systemctl start qemu-guest-agent
 
 # Verify
-qm guest cmd 100 ping
-qm guest exec 100 -- systemctl is-active qemu-guest-agent
+qm guest cmd 9201 ping
+qm guest exec 9201 -- systemctl is-active qemu-guest-agent
 
 # Document
 pvesh get /cluster/log --limit 100 --output-format json | \
-  jq -r '.[] | select(.cmd | test("vms/100")) | .cmd'
+  jq -r '.[] | select(.cmd | test("vms/9201")) | .cmd'
 ```
 
 ## 10. The common mistakes

@@ -41,13 +41,13 @@ one.
 
 ```bash
 # A VM
-qm status 100
-qm showcmd 100
-qm guest cmd 100 ping
-qm guest exec 100 -- ip -brief a
-qm guest exec 100 -- ip route
-qm guest exec 100 -- cat /etc/resolv.conf
-qm guest exec 100 -- systemctl --failed --no-legend
+qm status 9201
+qm showcmd 9201
+qm guest cmd 9201 ping
+qm guest exec 9201 -- ip -brief a
+qm guest exec 9201 -- ip route
+qm guest exec 9201 -- cat /etc/resolv.conf
+qm guest exec 9201 -- systemctl --failed --no-legend
 
 # A container
 pct status 300
@@ -104,7 +104,7 @@ For an incident, the order is:
 
 ## 7. What you do
 
-1. Break VM 100 deliberately.
+1. Break VM 9201 deliberately.
 2. Take the forensic snapshot.
 3. Work the decision tree and identify the layer.
 4. Repair the guest.

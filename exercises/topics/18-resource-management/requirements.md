@@ -6,24 +6,24 @@
 
 ## The CPU
 
-- [ ] VM 100 has 2 sockets and 2 cores.
-- [ ] VM 100 has a CPU limit that is not unlimited (the limit is not `0`).
-- [ ] VM 100 has a CPU weight that is set.
-- [ ] VM 100 has a CPU type that is portable between the nodes.
+- [ ] VM 9201 has 2 sockets and 2 cores.
+- [ ] VM 9201 has a CPU limit that is not unlimited (the limit is not `0`).
+- [ ] VM 9201 has a CPU weight that is set.
+- [ ] VM 9201 has a CPU type that is portable between the nodes.
 
 ## The memory
 
-- [ ] VM 100 has a memory limit that is set.
-- [ ] VM 100 has a balloon value that is set and is lower than the memory
+- [ ] VM 9201 has a memory limit that is set.
+- [ ] VM 9201 has a balloon value that is set and is lower than the memory
       limit.
 - [ ] The database container CT 301 has **no** balloon - the balloon is
       either absent or `0`.
 
 ## The disk
 
-- [ ] VM 100 has a disk that is larger than the original 32 GB - it was
+- [ ] VM 9201 has a disk that is larger than the original 32 GB - it was
       grown.
-- [ ] VM 100 has at least one disk attached.
+- [ ] VM 9201 has at least one disk attached.
 - [ ] The disk configuration contains the discard and the iothread options.
 
 ## The container limits

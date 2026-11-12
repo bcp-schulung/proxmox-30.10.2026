@@ -32,7 +32,7 @@ pvesm add pbs pbs-main \
 ```bash
 pvesh create /cluster/backup \
   --storage pbs-main \
-  --vmid 100,301 \
+  --vmid 9201,301 \
   --schedule daily \
   --mode snapshot \
   --enabled 1 \
@@ -54,7 +54,7 @@ pvesh get /cluster/backup
   {
     "id": "backup-abcdef",
     "storage": "pbs-main",
-    "vmid": "100,301",
+    "vmid": "9201,301",
     "schedule": "daily",
     "mode": "snapshot",
     "enabled": 1,
@@ -100,20 +100,20 @@ common, "something from 14 months ago" is rare.
 ## 3. The manual backup
 
 ```bash
-vzdump 100 --storage pbs-main --mode snapshot
+vzdump 9201 --storage pbs-main --mode snapshot
 vzdump 301 --storage pbs-main --mode snapshot
 ```
 
 Expected:
 
 ```
-INFO:  100: guest has CT lock, cleanup will try to remove it
-INFO:  100: started task with UPID pvesm:100:root@pam:6a3b1c2d:...
-INFO:  100: (fuse) backup: vm-100-disk-0.qcow2: 8.00 GiB (22.4% of 32.00 GiB)
-INFO:  100: backup is sparse: 8.00 GiB (22.4% of 32.00 GiB)
-INFO:  100: transferred 8.00 GiB from 0 to 0
-INFO:  100: (fuse) volume 'vm-100-disk-0' is sparse: 8.00 GiB (22.4% of 32.00 GiB)
-INFO:  100: end task
+INFO:  9201: guest has CT lock, cleanup will try to remove it
+INFO:  9201: started task with UPID pvesm:9201:root@pam:6a3b1c2d:...
+INFO:  9201: (fuse) backup: vm-9201-disk-0.qcow2: 8.00 GiB (22.4% of 32.00 GiB)
+INFO:  9201: backup is sparse: 8.00 GiB (22.4% of 32.00 GiB)
+INFO:  9201: transferred 8.00 GiB from 0 to 0
+INFO:  9201: (fuse) volume 'vm-9201-disk-0' is sparse: 8.00 GiB (22.4% of 32.00 GiB)
+INFO:  9201: end task
 ```
 
 The `sparse` line is the deduplication at work - only the used blocks are
@@ -144,21 +144,21 @@ qmrestore pbs-main:backup/vm/100/2026-11-10T02:00:00Z 190 --storage nfs-lab
 Expected:
 
 ```
-INFO: restore VM 100 from backup 2026-11-10T02:00:00Z
-INFO: 100: guest has CT lock, cleanup will try to remove it
-INFO: start VM 100 on node 'pve1'
-INFO: 100: start failed: unknown error - maybe because of wrong --storage
+INFO: restore VM 9201 from backup 2026-11-10T02:00:00Z
+INFO:  9201: guest has CT lock, cleanup will try to remove it
+INFO: start VM 9201 on node 'pve1'
+INFO:  9201: start failed: unknown error - maybe because of wrong --storage
 ```
 
 No - that last line only happens when the storage is wrong. The normal
 output:
 
 ```
-INFO: restore VM 100 from backup 2026-11-10T02:00:00Z
-INFO: 100: guest has CT lock, cleanup will try to remove it
+INFO: restore VM 9201 from backup 2026-11-10T02:00:00Z
+INFO:  9201: guest has CT lock, cleanup will try to remove it
 INFO: 1 images with type 'qcow2' in the backup
 INFO: 1 images with type 'raw' in the backup
-INFO: start VM 100 on node 'pve1'
+INFO: start VM 9201 on node 'pve1'
 ```
 
 ### The restore is a linked clone by default
@@ -197,7 +197,7 @@ qm guest exec 190 -- hostname
 ```
 
 The restored guest keeps the configuration of the backup, so the hostname
-is `web01` - it is the same guest, restored.
+is `debian13-run-pve1` - it is the same guest, restored.
 
 ## 5. The container restore
 
@@ -218,7 +218,7 @@ proxmox-backup-manager snapshot list --datastore main
 ```
 --- snapshot list ---
 vmid    type  time
-100     qemu  2026-11-10T02:00:00Z
+9201     qemu  2026-11-10T02:00:00Z
 301     lxc   2026-11-10T02:05:00Z
 ```
 
@@ -250,12 +250,12 @@ backup server still cannot read them.
 ```bash
 # The job
 pvesh create /cluster/backup \
-  --storage pbs-main --vmid 100,301 \
+  --storage pbs-main --vmid 9201,301 \
   --schedule daily --mode snapshot --enabled 1 --compress zstd \
   --retention-keep-daily 7 --retention-keep-weekly 4 --retention-keep-monthly 6
 
 # The manual backups
-vzdump 100 --storage pbs-main --mode snapshot
+vzdump 9201 --storage pbs-main --mode snapshot
 vzdump 301 --storage pbs-main --mode snapshot
 
 pvesm list pbs-main --content backup

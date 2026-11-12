@@ -11,6 +11,14 @@ DATASTORE="${2:?datastore name required}"
 BACKUP_USER="${3:?backup user required}"
 PASSWORD="${4:?password required}"
 
+# The device may be given as a bare name ("nvme1n1") or as a full path
+# ("/dev/nvme1n1"). The tools need the full path.
+case "${DEVICE}" in
+    /dev/*) ;;
+    "")     echo "No device given" >&2; exit 1 ;;
+    *)      DEVICE="/dev/${DEVICE}" ;;
+esac
+
 export DEBIAN_FRONTEND=noninteractive
 
 # --- the datastore volume --------------------------------------------------
@@ -23,7 +31,28 @@ mkdir -p /var/lib/proxmox-backup
 if ! grep -q '^/var/lib/proxmox-backup ' /etc/fstab; then
     printf '/var/lib/proxmox-backup %s ext4 defaults,nofail 0 2\n' "${DEVICE}" >> /etc/fstab
 fi
-mountpoint -q /var/lib/proxmox-backup || mount /var/lib/proxmox-backup
+# The mount is retried: a freshly attached EBS volume shows up in the
+# device list before udev has created the device node in /dev, and the
+# mount then fails with "Can't lookup blockdev".
+mounted=0
+for _ in $(seq 1 30); do
+    if mountpoint -q /var/lib/proxmox-backup; then
+        mounted=1
+        break
+    fi
+    if [ -b "${DEVICE}" ] && mount -t ext4 "${DEVICE}" /var/lib/proxmox-backup 2>/dev/null; then
+        mounted=1
+        break
+    fi
+    sleep 2
+done
+
+if [ "${mounted}" != "1" ]; then
+    echo "Could not mount ${DEVICE} on /var/lib/proxmox-backup" >&2
+    exit 1
+fi
+
+echo "${DEVICE} is mounted on /var/lib/proxmox-backup"
 
 # --- the root password -----------------------------------------------------
 echo "root:${PASSWORD}" | chpasswd

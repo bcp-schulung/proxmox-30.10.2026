@@ -6,9 +6,9 @@
 
 ## The snapshot
 
-- [ ] VM 100 has a snapshot named `pre-update`.
+- [ ] VM 9201 has a snapshot named `pre-update`.
 - [ ] The snapshot carries a description.
-- [ ] The snapshot is listed by `qm listsnapshot 100`.
+- [ ] The snapshot is listed by `qm listsnapshot 9201`.
 
 ## The rollback
 
@@ -20,7 +20,7 @@
 ## The cleanup
 
 - [ ] The snapshot `pre-update` is deleted.
-- [ ] `qm listsnapshot 100` no longer lists `pre-update`.
+- [ ] `qm listsnapshot 9201` no longer lists `pre-update`.
 
 ---
 

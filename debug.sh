@@ -428,13 +428,15 @@ debug_guests() {
         ssh_exec_q "${priv}" "true" || continue
 
         local vmid name status
-        for vmid in ${VM_WEB_ID} ${VM_TEMPLATE_ID} ${VM_CLONE_FULL_ID} ${VM_CLONE_LINKED_ID}; do
+        # The templates of the three nodes, and the running guests.
+        for vmid in ${VM_TEMPLATE_ID} ${VM_TEMPLATE_ID_2} ${VM_TEMPLATE_ID_3} \
+                    ${VM_WEB_ID} ${VM_CLONE_FULL_ID} ${VM_CLONE_LINKED_ID}; do
             name="$(ssh_exec "${priv}" "qm config ${vmid} 2>/dev/null | grep '^name:' | awk '{print \$2}'")"
             [ -n "${name}" ] || continue
             status="$(ssh_exec "${priv}" "qm status ${vmid} 2>/dev/null | awk '{print \$2}'")"
             if [ "${status}" = "running" ]; then
                 report PASS "VM ${vmid} (${name}) is running"
-            elif [ "${vmid}" = "${VM_TEMPLATE_ID}" ]; then
+            elif [ "${vmid}" = "${VM_TEMPLATE_ID}" ] || [ "${vmid}" = "${VM_TEMPLATE_ID_2}" ] || [ "${vmid}" = "${VM_TEMPLATE_ID_3}" ]; then
                 report PASS "VM ${vmid} (${name}) is a template"
             else
                 report WARN "VM ${vmid} (${name}) is ${status:-unknown}"

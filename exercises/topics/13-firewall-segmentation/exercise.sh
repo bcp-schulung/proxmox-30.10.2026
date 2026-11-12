@@ -79,11 +79,11 @@ esac
 # =============================================================================
 ex_section "The segmentation"
 
-net100="$(ex_out "qm config 100 2>/dev/null | grep '^net0:'")"
-ex_assert_contains "the web tier VM 100 carries VLAN 20" "${net100}" "tag=20"
+net100="$(ex_out "qm config 9201 2>/dev/null | grep '^net0:'")"
+ex_assert_contains "the web tier VM 9201 carries VLAN 20" "${net100}" "tag=20"
 
-net101="$(ex_out "qm config 101 2>/dev/null | grep '^net0:'")"
-ex_assert_contains "the web tier VM 101 carries VLAN 20" "${net101}" "tag=20"
+net101="$(ex_out "qm config 9202 2>/dev/null | grep '^net0:'")"
+ex_assert_contains "the web tier VM 9202 carries VLAN 20" "${net101}" "tag=20"
 
 net300="$(ex_out "pct config 300 2>/dev/null | grep '^net0:'")"
 ex_assert_contains "the application tier CT 300 carries VLAN 30" "${net300}" "tag=30"
@@ -99,11 +99,11 @@ ex_assert_not_empty "the bridge reports its VLAN table" "${vlan}"
 # =============================================================================
 ex_section "The guest level rules"
 
-vmfw="$(ex_out "cat /etc/pve/firewall/100.fw 2>/dev/null")"
-ex_assert_not_empty "VM 100 has its own firewall rules" "${vmfw}"
+vmfw="$(ex_out "cat /etc/pve/firewall/9201.fw 2>/dev/null")"
+ex_assert_not_empty "VM 9201 has its own firewall rules" "${vmfw}"
 
 # The web tier reaches the database tier.
-dbrule="$(ex_out "cat /etc/pve/firewall/100.fw 2>/dev/null | grep -E '5432|3306'")"
+dbrule="$(ex_out "cat /etc/pve/firewall/9201.fw 2>/dev/null | grep -E '5432|3306'")"
 ex_assert_not_empty "a rule lets the web tier reach the database tier" "${dbrule}"
 
 # The database tier does not reach the web tier.

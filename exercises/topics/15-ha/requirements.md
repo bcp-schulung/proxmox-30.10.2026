@@ -13,8 +13,8 @@
 
 ## The managed resources
 
-- [ ] VM 100 is managed by HA.
-- [ ] VM 101 is managed by HA.
+- [ ] VM 9201 is managed by HA.
+- [ ] VM 9202 is managed by HA.
 - [ ] CT 301 is managed by HA.
 - [ ] All three are in the `started` state.
 - [ ] All three have a configured node.
@@ -39,8 +39,8 @@ mistake. A resource can be *configured* for HA and still not be started:
 
 ```
 Type     ID     Status    Last HA error
-vm       100    started
-vm       101    ignored   - resource not started
+vm       9201    started
+vm       9202    ignored   - resource not started
 ```
 
 The state `ignored` means the resource is known but deliberately not

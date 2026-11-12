@@ -46,7 +46,7 @@ automation@pve!terraform     1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 Then the ACL:
 
 ```bash
-pveum acl modify /vms/100 --tokens 'automation@pve!terraform' --roles VM-Operator
+pveum acl modify /vms/9201 --tokens 'automation@pve!terraform' --roles VM-Operator
 ```
 
 ## 3. Use it
@@ -61,22 +61,22 @@ curl -sk -H "Authorization: PVEAPIToken=${PVE_TOKEN}" \
 
 ```json
 {
-  "vmid": 100,
+  "vmid": 9201,
   "type": "qemu",
   "node": "pve1",
-  "name": "web01"
+  "name": "debian13-run-pve1"
 }
 ```
 
 ```bash
-# The configuration of VM 100
+# The configuration of VM 9201
 curl -sk -H "Authorization: PVEAPIToken=${PVE_TOKEN}" \
      "https://$(hostname):8006/api2/json/nodes/$(hostname)/qemu/100/config" | jq '.data | {name, cores, memory}'
 ```
 
 ```json
 {
-  "name": "web01",
+  "name": "debian13-run-pve1",
   "cores": 2,
   "memory": 4096
 }
@@ -100,7 +100,7 @@ pvesh get /cluster/resources
 
 ## 4. Show the limit of the token
 
-The token is scoped to `/vms/100`. It cannot read the container:
+The token is scoped to `/vms/9201`. It cannot read the container:
 
 ```bash
 curl -sk -H "Authorization: PVEAPIToken=${PVE_TOKEN}" \
@@ -122,7 +122,7 @@ granted.
 ```bash
 # The same with a token without privilege separation
 pveum user token add automation@pve terraform-full
-pveum acl modify /vms/100 --tokens 'automation@pve!terraform-full' --roles VM-Operator
+pveum acl modify /vms/9201 --tokens 'automation@pve!terraform-full' --roles VM-Operator
 # -> the token can now read everything, because it inherits the user's rights
 ```
 
@@ -168,7 +168,7 @@ status
 pvesh get /cluster/resources
 
 # POST
-pvesh create /cluster/backup --storage pbs-main --vmid 100 --schedule daily
+pvesh create /cluster/backup --storage pbs-main --vmid 9201 --schedule daily
 
 # PUT
 pvesh set /cluster/firewall/options --enable 1 --policy_in DROP
@@ -213,8 +213,8 @@ pve1	online	uptime=86400
 pve2	online	uptime=86400
 pve3	online	uptime=86400
 ---
-100	web01	pve1	running
-101	web02	pve2	running
+9201	debian13-run-pve1	pve1	running
+9202	debian13-run-pve2	pve2	running
 300	app01	pve1	running
 301	db01	pve2	running
 ```
@@ -259,7 +259,7 @@ resource "proxmox_virtual_environment_vm" "web03" {
 
   disk {
     datastore_id = "nfs-lab"
-    file_id      = "debian-13-genericcloud.qcow2"
+    file_id      = "debian-13-generic-amd64.qcow2"
     import_from  = "download"
   }
 
@@ -316,7 +316,7 @@ terraform apply
 ```bash
 # The token
 pveum user token add automation@pve terraform --privsep 1
-pveum acl modify /vms/100 --tokens 'automation@pve!terraform' --roles VM-Operator
+pveum acl modify /vms/9201 --tokens 'automation@pve!terraform' --roles VM-Operator
 
 # The use
 export PVE_TOKEN='automation@pve!terraform=<the secret>'

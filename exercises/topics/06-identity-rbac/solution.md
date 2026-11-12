@@ -95,8 +95,8 @@ guest. Without it, the worst they can do is power cycle something.
 ## 4. The ACL
 
 ```bash
-pveum acl modify /vms/100 --users jsmith@ad-corp --roles VM-Operator
-pveum acl modify /vms/101 --users jsmith@ad-corp --roles VM-Operator
+pveum acl modify /vms/9201 --users jsmith@ad-corp --roles VM-Operator
+pveum acl modify /vms/9202 --users jsmith@ad-corp --roles VM-Operator
 ```
 
 Verify:
@@ -107,8 +107,8 @@ pveum acl list
 
 ```
 PATH      TYPE    DATA           PRIV
-/vms/100  user    jsmith@ad-corp  VM-Operator
-/vms/101  user    jsmith@ad-corp  VM-Operator
+/vms/9201  user    jsmith@ad-corp  VM-Operator
+/vms/9202  user    jsmith@ad-corp  VM-Operator
 ```
 
 ### Why not on `/vms` and why not on `/`
@@ -127,8 +127,8 @@ applies.
 
 ### The propagation
 
-An ACL on `/vms/100` propagates down to the children of VM 100 - its disks
-and its network interfaces - but never sideways to VM 101.
+An ACL on `/vms/9201` propagates down to the children of VM 9201 - its disks
+and its network interfaces - but never sideways to VM 9202.
 
 ## 5. The API token
 
@@ -169,7 +169,7 @@ token would already have everything.
 ## 6. The token ACL
 
 ```bash
-pveum acl modify /vms/100 --tokens 'automation@pve!terraform' --roles VM-Operator
+pveum acl modify /vms/9201 --tokens 'automation@pve!terraform' --roles VM-Operator
 ```
 
 Verify:
@@ -180,9 +180,9 @@ pveum acl list
 
 ```
 PATH      TYPE    DATA                        PRIV
-/vms/100  user    jsmith@ad-corp             VM-Operator
-/vms/100  token   automation@pve!terraform    VM-Operator
-/vms/101  user    jsmith@ad-corp             VM-Operator
+/vms/9201  user    jsmith@ad-corp             VM-Operator
+/vms/9201  token   automation@pve!terraform    VM-Operator
+/vms/9202  user    jsmith@ad-corp             VM-Operator
 ```
 
 Two separate entries - one for the user, one for the token. That is what
@@ -205,12 +205,12 @@ pveum user permissions jsmith@ad-corp
 
 ```
 Path              Privilege         Type
-/vms/100          VM.Console        user
-/vms/100          VM.Monitor        user
-/vms/100          VM.PowerMgmt      user
-/vms/101          VM.Console        user
-/vms/101          VM.Monitor        user
-/vms/101          VM.PowerMgmt      user
+/vms/9201          VM.Console        user
+/vms/9201          VM.Monitor        user
+/vms/9201          VM.PowerMgmt      user
+/vms/9202          VM.Console        user
+/vms/9202          VM.Monitor        user
+/vms/9202          VM.PowerMgmt      user
 ```
 
 Three privileges on two guests. That is the whole blast radius.
@@ -228,7 +228,7 @@ pvesh get /cluster/log --limit 20
       "id": "abc123",
       "time": 1762760000,
       "username": "root@pam",
-      "cmd": "pveum acl modify /vms/100 --users jsmith@ad-corp --roles VM-Operator",
+      "cmd": "pveum acl modify /vms/9201 --users jsmith@ad-corp --roles VM-Operator",
       "node": "pve1"
     }
   ]
@@ -246,11 +246,11 @@ pveum user add jsmith@ad-corp --password '<password>'
 
 pveum role add VM-Operator -privs "VM.Console,VM.PowerMgmt,VM.Monitor"
 
-pveum acl modify /vms/100 --users jsmith@ad-corp --roles VM-Operator
-pveum acl modify /vms/101 --users jsmith@ad-corp --roles VM-Operator
+pveum acl modify /vms/9201 --users jsmith@ad-corp --roles VM-Operator
+pveum acl modify /vms/9202 --users jsmith@ad-corp --roles VM-Operator
 
 pveum user token add automation@pve terraform --privsep 1
-pveum acl modify /vms/100 --tokens 'automation@pve!terraform' --roles VM-Operator
+pveum acl modify /vms/9201 --tokens 'automation@pve!terraform' --roles VM-Operator
 
 pveum acl list
 pveum user permissions jsmith@ad-corp

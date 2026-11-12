@@ -25,8 +25,8 @@
 
 ## The ACL
 
-- [ ] An ACL grants `VM-Operator` to `jsmith@ad-corp` on `/vms/100`.
-- [ ] An ACL grants `VM-Operator` to `jsmith@ad-corp` on `/vms/101`.
+- [ ] An ACL grants `VM-Operator` to `jsmith@ad-corp` on `/vms/9201`.
+- [ ] An ACL grants `VM-Operator` to `jsmith@ad-corp` on `/vms/9202`.
 - [ ] No ACL grants `jsmith@ad-corp` a role on the root path `/`.
 - [ ] No ACL grants `jsmith@ad-corp` a role on `/vms` (that would be all
       guests).
@@ -34,7 +34,7 @@
 ## The effective permissions
 
 - [ ] `pveum user permissions jsmith@ad-corp` lists `VM.Console` on
-      `/vms/100`.
+      `/vms/9201`.
 - [ ] The effective permissions do **not** include `Sys.Audit`.
 - [ ] The effective permissions do **not** include `VM.Config.Disk`.
 
@@ -42,7 +42,7 @@
 
 - [ ] An API token `automation@pve!terraform` exists.
 - [ ] The token has privilege separation enabled.
-- [ ] The token has its own ACL entry on `/vms/100`.
+- [ ] The token has its own ACL entry on `/vms/9201`.
 - [ ] The token's ACL entry grants the `VM-Operator` role.
 - [ ] The token's ACL is a **separate entry** from the user's ACL.
 

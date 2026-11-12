@@ -1046,12 +1046,48 @@ lab_phase_backup() {
 # ---------------------------------------------------------------------------
 # Phase 8 - guests
 # ---------------------------------------------------------------------------
+# Refuse to build the current inventory on a cluster that still holds the
+# legacy one.
+#
+# The legacy inventory was the shared template 9001, the local template
+# 9000 and the guests 100, 101 and 102. A cluster that holds those objects
+# is in the old layout. Building the new inventory on top of it leaves
+# both layouts in place, and the two disagree about what a template is.
+#
+# lab_assert_no_legacy_inventory <node-address>
+lab_assert_no_legacy_inventory() {
+    local priv="$1"
+    local legacy="" vmid
+
+    for vmid in 9000 9001 9002 100 101 102; do
+        if pve_cmd_q "${priv}" "qm config ${vmid} >/dev/null 2>&1"; then
+            legacy="${legacy} ${vmid}"
+        fi
+    done
+
+    if [ -n "${legacy}" ]; then
+        log_error "The legacy objects${legacy} are still on the cluster."
+        log_error "The current inventory is ${VM_TEMPLATE_ID}, ${VM_TEMPLATE_ID_2}, ${VM_TEMPLATE_ID_3} and ${VM_WEB_ID}, ${VM_CLONE_FULL_ID}, ${VM_CLONE_LINKED_ID}."
+        log_error "Remove the legacy objects before running this phase:"
+        for vmid in ${legacy}; do
+            log_error "  ssh admin@<node> 'sudo qm destroy ${vmid} --purge 1'"
+        done
+        die "Refusing to build a second layout on top of the legacy one."
+    fi
+}
+
 lab_phase_guests() {
     log_step "Phase 8/8 - Provisioning the guests"
 
     local first_node first_priv
     first_node="$(lab_node_list | head -1)"
     first_priv="$(state_reach_ip "${first_node}")"
+
+    # The legacy inventory. An earlier version of the lab used the shared
+    # template 9001, the local template 9000 and the guests 100, 101 and
+    # 102. A cluster that still holds those objects is in the old layout,
+    # and building the new one on top of it would leave both in place.
+    lab_assert_no_legacy_inventory "${first_priv}"
 
     local ssh_pubkey guest_password
     # The public key of the lab key pair. It is derived from the private
@@ -1074,73 +1110,116 @@ lab_phase_guests() {
 }
 
 # Create the golden image VM, turn it into a template and clone it.
+# lab_provision_vms <node> <node-address> <sshkey> <password>
+#
+# The first argument is the NAME of the node (pve1, pve2, ...), the
+# second one its address. The name is what 'qm clone --target' expects,
+# the address is what the SSH commands need.
+#
+# There are TWO templates, because the two kinds of clone have
+# contradictory requirements:
+#
+#   A full clone can be moved to another node only when the source is on
+#   shared storage. A template on the local storage of a node is refused
+#   with
+#
+#     can't clone VM to node 'pve2' (VM uses local storage)
+#
+#   A linked clone is a snapshot of the template's disk, and a snapshot is
+#   only possible on a storage that supports them. NFS does not, and the
+#   request is refused with
+#
+#     Linked clone feature is not supported for 'nfs-lab:9000/...'
+#
+# So there is ONE template PER NODE, on the local LVM-thin storage of that
+# node, and ONE running guest PER NODE, cloned from the template of the
+# node it runs on.
 lab_provision_vms() {
     local node="$1" host="$2" ssh_pubkey="$3" guest_password="$4"
 
-    # The template lives on the local LVM-thin storage, the full clones on
-    # the shared NFS storage.
-    #
-    # A linked clone is a snapshot of the template's disk, and a snapshot
-    # is only possible on a storage that supports them. NFS does not, and
-    # the request is refused with
-    #
-    #   Linked clone feature is not supported for 'nfs-lab:9000/...'
-    #
-    # LVM-thin supports snapshots, so the template and the linked clone
-    # live there. The full clones go to the shared storage, so that the
-    # seminar exercises the cluster and the shared storage.
-    local storage="${NFS_STORAGE_ID}"
-    local template_storage="${LOCAL_STORAGE_ID}"
+    # The templates and the guests live on the node-local LVM-thin
+    # storage, so that a template can be cloned onto its own node and
+    # supports the snapshots that a linked clone needs.
+    local storage="${LOCAL_STORAGE_ID}"
 
     if [ "$(state_get ".pve.vms_ready")" = "true" ]; then
         log_info "The VMs are already provisioned"
         return 0
     fi
 
-    local image="/var/lib/vz/${GUEST_OS_NAME}-genericcloud.qcow2"
-    if ! pve_cmd_q "${host}" "test -f '${image}'"; then
-        pve_download "${host}" "${GUEST_OS_URL}" "${image}"
-    else
-        log_info "The guest image is already present on ${node}"
-    fi
+    local image="/var/lib/vz/template/iso/${GUEST_OS_NAME}-generic-amd64.qcow2"
 
-    # --- the golden image / template ---
-    local template_id="${VM_TEMPLATE_ID}"
-    if ! pve_cmd_q "${host}" "qm status ${template_id} >/dev/null 2>&1"; then
-        local ci_yaml
-        ci_yaml="$(pve_write_cloudinit "${host}" "${template_id}" "${VM_TEMPLATE_NAME}" "${ssh_pubkey}" "${guest_password}")"
-        pve_vm_create_from_cloudimage "${host}" "${template_id}" "${VM_TEMPLATE_NAME}" "${template_storage}" "${image}" "${ci_yaml}"
-        pve_vm_make_template "${host}" "${template_id}"
-        log_ok "Template ${template_id} (${VM_TEMPLATE_NAME}) created"
-    fi
+    # The address of this node. Every command that talks to a node
+    # needs the address, and the name is only used for the messages.
+    local priv
+    priv="$(state_reach_ip "${node}")"
 
-    # --- the clones ---
-    # The guests are spread over the nodes so that the cluster looks like a
-    # real one and so that the shared storage is exercised.
+    # The nodes of the cluster.
     local node2 node3
     node2="$(lab_node_list | sed -n 2p)"
     node3="$(lab_node_list | sed -n 3p)"
 
-    local host2="${node2}" host3="${node3}"
-    local priv priv2 priv3
-    priv="$(state_reach_ip "${node}")"
+    local priv2 priv3
     priv2="$(state_reach_ip "${node2}")"
     priv3="$(state_reach_ip "${node3}")"
 
-    lab_clone_vm "${host}" "${priv}" "${template_id}" "${VM_WEB_ID}" "${VM_WEB_NAME}" "${storage}" full "${ssh_pubkey}" "${guest_password}" "${node}"
-    lab_clone_vm "${host2}" "${priv2}" "${template_id}" "${VM_CLONE_FULL_ID}" "${VM_CLONE_FULL_NAME}" "${storage}" full "${ssh_pubkey}" "${guest_password}" "${node}"
-    # The linked clone needs the storage of the template: it is a
-    # snapshot of the template's disk and cannot be moved to another
-    # storage.
-    lab_clone_vm "${host3}" "${priv3}" "${template_id}" "${VM_CLONE_LINKED_ID}" "${VM_CLONE_LINKED_NAME}" "${template_storage}" linked "${ssh_pubkey}" "${guest_password}" "${node}"
+    # ---------------------------------------------------------------------
+    # The image and the templates.
+    #
+    # Every node gets its own copy of the Debian image and its own
+    # template. The image is a qcow2 disk, not an ISO: it is brought in
+    # with 'qm importdisk', because the 'iso/' subdirectory of a
+    # directory storage only accepts real ISO extensions.
+    # ---------------------------------------------------------------------
+    local n name priv_of
+    local ids="${VM_TEMPLATE_ID} ${VM_TEMPLATE_ID_2} ${VM_TEMPLATE_ID_3}"
+    local names="${VM_TEMPLATE_NAME} ${VM_TEMPLATE_NAME_2} ${VM_TEMPLATE_NAME_3}"
+    local privs="${priv} ${priv2} ${priv3}"
+    local nodes="${node} ${node2} ${node3}"
+
+    for n in 1 2 3; do
+        name="$(echo "${names}" | cut -d' ' -f${n})"
+        priv_of="$(echo "${privs}" | cut -d' ' -f${n})"
+        local this_node this_id
+        this_node="$(echo "${nodes}" | cut -d' ' -f${n})"
+        this_id="$(echo "${ids}" | cut -d' ' -f${n})"
+
+        # The image has to be on the node that will hold the template.
+        if ! pve_cmd_q "${priv_of}" "test -f '${image}'"; then
+            log_info "Downloading the guest image onto ${this_node}"
+            pve_download "${priv_of}" "${GUEST_OS_URL}" "${image}"
+        else
+            log_info "The guest image is already present on ${this_node}"
+        fi
+
+        if ! pve_cmd_q "${priv_of}" "qm status ${this_id} >/dev/null 2>&1"; then
+            log_info "Creating the template ${this_id} on ${this_node}"
+            pve_vm_create_local_template "${priv_of}" "${this_id}" "${name}" "${storage}" "${image}"
+            log_ok "Template ${this_id} (${name}) created on ${this_node}"
+        else
+            log_info "The template ${this_id} already exists on ${this_node}"
+        fi
+    done
+
+    # ---------------------------------------------------------------------
+    # The guests.
+    #
+    # Every guest is a FULL clone of the template on the node it runs on.
+    # A full clone is used rather than a linked clone so that the three
+    # guests are independent: a linked clone shares the disk of its
+    # template and a write in the guest changes the template.
+    # ---------------------------------------------------------------------
+    lab_clone_vm "${node}"  "${priv}"  "${VM_TEMPLATE_ID}"   "${VM_WEB_ID}"          "${VM_WEB_NAME}"          "${storage}" full "${ssh_pubkey}" "${guest_password}" "${node}"
+    lab_clone_vm "${node2}" "${priv2}" "${VM_TEMPLATE_ID_2}" "${VM_CLONE_FULL_ID}"   "${VM_CLONE_FULL_NAME}"   "${storage}" full "${ssh_pubkey}" "${guest_password}" "${node2}"
+    lab_clone_vm "${node3}" "${priv3}" "${VM_TEMPLATE_ID_3}" "${VM_CLONE_LINKED_ID}" "${VM_CLONE_LINKED_NAME}" "${storage}" full "${ssh_pubkey}" "${guest_password}" "${node3}"
 
     # --- start them ---
-    lab_start_vm "${host}" "${priv}" "${VM_WEB_ID}"
-    lab_start_vm "${host2}" "${priv2}" "${VM_CLONE_FULL_ID}"
-    lab_start_vm "${host3}" "${priv3}" "${VM_CLONE_LINKED_ID}"
+    lab_start_vm "${node}"  "${priv}"  "${VM_WEB_ID}"
+    lab_start_vm "${node2}" "${priv2}" "${VM_CLONE_FULL_ID}"
+    lab_start_vm "${node3}" "${priv3}" "${VM_CLONE_LINKED_ID}"
 
     state_set ".pve.vms_ready" "true"
-    state_set ".pve.guests.vms" "[\"${VM_WEB_ID}\",\"${VM_TEMPLATE_ID}\",\"${VM_CLONE_FULL_ID}\",\"${VM_CLONE_LINKED_ID}\"]"
+    state_set ".pve.guests.vms" "[\"${VM_TEMPLATE_ID}\",\"${VM_TEMPLATE_ID_2}\",\"${VM_TEMPLATE_ID_3}\",\"${VM_WEB_ID}\",\"${VM_CLONE_FULL_ID}\",\"${VM_CLONE_LINKED_ID}\"]"
 }
 
 # Start a VM if it is not running yet.
@@ -1153,8 +1232,15 @@ lab_start_vm() {
     pve_guest_start "${priv}" vm "${vmid}" || log_warn "Could not start VM ${vmid}"
 }
 
+# lab_clone_vm <target-node> <target-priv> <src-vmid> <newid> <name> <storage> <mode> <sshkey> <password> <template-node>
+#
+# The first argument is the NAME of the node that shall run the clone, the
+# second one its address. The name is what 'qm clone --target' expects:
+# the option refuses an address with
+#
+#   target: invalid format - value does not look like a valid node name
 lab_clone_vm() {
-    local host="$1" priv="$2" src="$3" newid="$4" name="$5" storage="$6" mode="$7" ssh_pubkey="$8" guest_password="$9"
+    local target_node="$1" priv="$2" src="$3" newid="$4" name="$5" storage="$6" mode="$7" ssh_pubkey="$8" guest_password="$9"
     local template_node="${10}"
 
     if pve_cmd_q "${priv}" "qm status ${newid} >/dev/null 2>&1"; then
@@ -1169,13 +1255,13 @@ lab_clone_vm() {
         source_priv="$(state_reach_ip "${template_node}")"
     fi
 
-    pve_vm_clone "${source_priv}" "${src}" "${newid}" "${name}" "${storage}" "${mode}" "${host}"
+    pve_vm_clone "${source_priv}" "${src}" "${newid}" "${name}" "${storage}" "${mode}" "${target_node}"
 
     # Give the clone its own identity.
     local ci_yaml
     ci_yaml="$(pve_write_cloudinit "${priv}" "${newid}" "${name}" "${ssh_pubkey}" "${guest_password}")"
     pve_vm_set_cloudinit "${priv}" "${newid}" "${name}" "${ci_yaml}"
-    log_ok "VM ${newid} (${name}) created on ${host}"
+    log_ok "VM ${newid} (${name}) created on ${target_node}"
 }
 
 # Create the unprivileged LXC containers.
@@ -1305,8 +1391,23 @@ lab_phase_security() {
 # ---------------------------------------------------------------------------
 
 # Destroy every VM and container on every node.
+#
+# ONLY the objects of the lab are destroyed. A blanket "destroy every VM
+# that is listed" is what makes this function dangerous: it cannot tell a
+# lab object from something that an operator put on the cluster on
+# purpose, and it took the templates down with it when it ran against a
+# cluster that also held other work.
+#
+# The inventory comes from the configuration. The guest templates and
+# guests, and the containers, are listed there. Anything else on the
+# cluster is left alone.
 lab_destroy_guests() {
     log_step "Destroying the guests"
+
+    # The lab's own objects. The templates and the guests of the three
+    # nodes, and the two containers.
+    local vms="${VM_TEMPLATE_ID} ${VM_TEMPLATE_ID_2} ${VM_TEMPLATE_ID_3} ${VM_WEB_ID} ${VM_CLONE_FULL_ID} ${VM_CLONE_LINKED_ID}"
+    local cts="${CT_APP_ID} ${CT_DB_ID}"
 
     local node
     for node in $(lab_node_list); do
@@ -1316,17 +1417,21 @@ lab_destroy_guests() {
         fi
 
         local vmid
-        for vmid in $(lab_exec "${node}" "sudo qm list 2>/dev/null | tail -n +2 | awk '{print \$1}'"); do
+        for vmid in ${vms}; do
             [ -n "${vmid}" ] || continue
-            log_info "${node}: destroying VM ${vmid}"
-            lab_exec_q "${node}" "sudo qm destroy ${vmid} --purge 1 --destroy-unreferenced-disks 1"
+            if lab_exec_q "${node}" "sudo qm config ${vmid} >/dev/null 2>&1"; then
+                log_info "${node}: destroying VM ${vmid}"
+                lab_exec_q "${node}" "sudo qm destroy ${vmid} --purge 1 --destroy-unreferenced-disks 1"
+            fi
         done
 
         local ctid
-        for ctid in $(lab_exec "${node}" "sudo pct list 2>/dev/null | tail -n +2 | awk '{print \$1}'"); do
+        for ctid in ${cts}; do
             [ -n "${ctid}" ] || continue
-            log_info "${node}: destroying container ${ctid}"
-            lab_exec_q "${node}" "sudo pct destroy ${ctid} --purge 1"
+            if lab_exec_q "${node}" "sudo pct config ${ctid} >/dev/null 2>&1"; then
+                log_info "${node}: destroying container ${ctid}"
+                lab_exec_q "${node}" "sudo pct destroy ${ctid} --purge 1"
+            fi
         done
     done
 }
@@ -1406,10 +1511,12 @@ lab_print_summary() {
     printf '  Backup      : %s -> %s\n' "${PBS_STORAGE_ID}" "$(state_get ".pve.pbs_server")"
 
     printf '\n%sGuests%s\n' "${C_BOLD}" "${C_RESET}"
-    printf '  VM %-5s %-20s (template)\n' "${VM_TEMPLATE_ID}" "${VM_TEMPLATE_NAME}"
-    printf '  VM %-5s %-20s (full clone, live-migration target)\n' "${VM_WEB_ID}" "${VM_WEB_NAME}"
-    printf '  VM %-5s %-20s (full clone)\n' "${VM_CLONE_FULL_ID}" "${VM_CLONE_FULL_NAME}"
-    printf '  VM %-5s %-20s (linked clone)\n' "${VM_CLONE_LINKED_ID}" "${VM_CLONE_LINKED_NAME}"
+    printf '  VM %-5s %-20s (template, on pve1)\n' "${VM_TEMPLATE_ID}" "${VM_TEMPLATE_NAME}"
+    printf '  VM %-5s %-20s (template, on pve2)\n' "${VM_TEMPLATE_ID_2}" "${VM_TEMPLATE_NAME_2}"
+    printf '  VM %-5s %-20s (template, on pve3)\n' "${VM_TEMPLATE_ID_3}" "${VM_TEMPLATE_NAME_3}"
+    printf '  VM %-5s %-20s (full clone of %s, on pve1)\n' "${VM_WEB_ID}" "${VM_WEB_NAME}" "${VM_TEMPLATE_ID}"
+    printf '  VM %-5s %-20s (full clone of %s, on pve2)\n' "${VM_CLONE_FULL_ID}" "${VM_CLONE_FULL_NAME}" "${VM_TEMPLATE_ID_2}"
+    printf '  VM %-5s %-20s (full clone of %s, on pve3)\n' "${VM_CLONE_LINKED_ID}" "${VM_CLONE_LINKED_NAME}" "${VM_TEMPLATE_ID_3}"
     printf '  CT %-5s %-20s (unprivileged LXC)\n' "${CT_APP_ID}" "${CT_APP_NAME}"
     printf '  CT %-5s %-20s (unprivileged LXC)\n' "${CT_DB_ID}" "${CT_DB_NAME}"
 

@@ -53,7 +53,7 @@ milliseconds.
 This is the rule that decides everything:
 
 ```bash
-qm migrate 100 pve2 --online
+qm migrate 9201 pve2 --online
 # migrate VMs with local disks are not supported
 ```
 
@@ -62,14 +62,14 @@ stays where it is.
 
 ```bash
 # Move the disk first
-qm move_disk 100 scsi0 nfs-lab --target-directory vm-100-disk-0
-qm migrate 100 pve2 --online
+qm move_disk 9201 scsi0 nfs-lab --target-directory vm-9201-disk-0
+qm migrate 9201 pve2 --online
 ```
 
 ## 4. The CPU type
 
 ```bash
-qm set 100 --cpu host
+qm set 9201 --cpu host
 ```
 
 `host` exposes the exact CPU features of the node. It is the fastest
@@ -80,24 +80,24 @@ check refuses to start after the move.
 For a cluster that has to be able to migrate freely:
 
 ```bash
-qm set 100 --cpu x86-64-v2-AES
+qm set 9201 --cpu x86-64-v2-AES
 ```
 
 ## 5. The migration modes
 
 | Command | Behaviour |
 |---|---|
-| `qm migrate 100 pve2 --online` | The guest keeps running |
-| `qm migrate 100 pve2` | The guest is stopped, moved and started |
-| `qm migrate 100 pve2 --with-local-disks` | Also moves local disks (slow) |
-| `qm migrate 100 pve2 --target-local` | Moves the disk to the target's local storage |
+| `qm migrate 9201 pve2 --online` | The guest keeps running |
+| `qm migrate 9201 pve2` | The guest is stopped, moved and started |
+| `qm migrate 9201 pve2 --with-local-disks` | Also moves local disks (slow) |
+| `qm migrate 9201 pve2 --target-local` | Moves the disk to the target's local storage |
 
 The offline migration works with any storage - because the guest is not
 running, the disk can simply be copied.
 
 ## 6. What you do
 
-1. Verify that VM 100 is on the shared storage.
+1. Verify that VM 9201 is on the shared storage.
 2. Migrate it to `pve2` while it is running.
 3. Verify that it now runs on `pve2`.
 4. Verify that the guest never stopped - the agent answers and the uptime

@@ -361,8 +361,8 @@ operates the web tier does not need.
 ### 5.3 The ACL
 
 ```bash
-pveum acl modify /vms/100 --users jsmith@ad-corp --roles VM-Operator
-pveum acl modify /vms/101 --users jsmith@ad-corp --roles VM-Operator
+pveum acl modify /vms/9201 --users jsmith@ad-corp --roles VM-Operator
+pveum acl modify /vms/9202 --users jsmith@ad-corp --roles VM-Operator
 ```
 
 Not on `/`. An ACL on `/` would give the operator the rights everywhere.
@@ -371,7 +371,7 @@ Not on `/`. An ACL on `/` would give the operator the rights everywhere.
 
 ```bash
 pveum user token add automation@pve terraform --privsep 1
-pveum acl modify /vms/100 --tokens 'automation@pve!terraform' --roles VM-Operator
+pveum acl modify /vms/9201 --tokens 'automation@pve!terraform' --roles VM-Operator
 ```
 
 `--privsep 1` is the important flag. Without it the token inherits the full
@@ -394,23 +394,39 @@ pveum user token list automation@pve
 
 ### 6.1 Get the image
 
+The image is a **qcow2 disk, not an ISO**, so it goes into the node's ISO
+directory and is brought in with `qm importdisk`. The `genericcloud` variant
+is not published under `trixie/latest` - only `generic` is.
+
 ```bash
-pvesm download-url nfs-lab https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2 debian-13-genericcloud.qcow2
+curl -fSL -o /var/lib/vz/template/iso/debian-13-generic-amd64.qcow2 \
+  https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
 ```
 
 ### 6.2 Create the VM and import the disk
 
+The template goes on the node-local `local-lvm`, not on the shared storage:
+a linked clone is a snapshot, and NFS does not support snapshots.
+
 ```bash
-qm create 9000 --name debian13-template --memory 2048 --cores 2 \
+qm create 9101 --name debian13-tpl-pve1 --memory 2048 --cores 2 \
   --net0 virtio,bridge=vmbr0 --scsihw virtio-scsi-single \
   --ostype l26 --machine q35 --bios ovmf \
-  --agent "enabled=1,fstrim_cloned_disks=1" --tablet 1 --onboot 1 \
+  --agent "enabled=1,fstrim_cloned_disks=1" --tablet 1 --onboot 0 \
   --ide2 local:cloudinit --ipconfig0 ip=dhcp
 
-qm importdisk 9000 nfs-lab:debian-13-genericcloud.qcow2 nfs-lab
-qm set 9000 --scsi0 nfs-lab:vm-9000-disk-0,discard=on,iothread=1 \
-  --efidisk0 nfs-lab:1,efitype=4m,pre-enrolled-keys=1 \
-  --boot order=scsi0
+# The EFI vars disk goes in BEFORE the import
+qm set 9101 --efidisk0 local-lvm:1,efitype=4m,pre-enrolled-keys=1
+
+qm importdisk 9101 /var/lib/vz/template/iso/debian-13-generic-amd64.qcow2 local-lvm
+
+# Read the imported volume name back - do NOT guess the disk number
+IMPORTED=$(qm config 9101 | grep '^unused0:' | sed 's/^unused0: //' | cut -d, -f1)
+qm set 9101 --scsi0 "${IMPORTED},discard=on,iothread=1" --boot order=scsi0
+qm set 9101 --delete unused0
+
+# Must be size=3G - a 4M disk here means the EFI vars were attached by mistake
+qm config 9101 | grep scsi0
 ```
 
 ### 6.3 The cloud-init snippet
@@ -418,10 +434,10 @@ qm set 9000 --scsi0 nfs-lab:vm-9000-disk-0,discard=on,iothread=1 \
 The snippet gives the guest its hostname, the guest agent and the credentials.
 
 ```bash
-cat > /tmp/ci-9000.yaml << EOF
+cat > /tmp/ci-9101.yaml << EOF
 #cloud-config
-hostname: debian13-template
-fqdn: debian13-template.nordwind.example.com
+hostname: debian13-tpl-pve1
+fqdn: debian13-tpl-pve1.nordwind.example.com
 manage_etc_hosts: true
 ssh_pwauth: true
 chpasswd:
@@ -436,7 +452,7 @@ runcmd:
   - [ systemctl, enable, --now, qemu-guest-agent ]
 EOF
 
-qm set 9000 --cicustom local:/tmp/ci-9000.yaml
+qm set 9101 --cicustom local:/tmp/ci-9101.yaml
 ```
 
 > **The trick that trips everybody up.** The cloud-init drive belongs to the
@@ -448,10 +464,10 @@ qm set 9000 --cicustom local:/tmp/ci-9000.yaml
 ### 6.4 Boot, check, template
 
 ```bash
-qm start 9000
-qm guest cmd 9000 ping          # the agent answers
-qm guest exec 9000 -- hostname
-qm template 9000                # now read-only, and clonable
+qm start 9101
+qm guest cmd 9101 ping          # the agent answers
+qm guest exec 9101 -- hostname
+qm template 9101                # now read-only, and clonable
 ```
 
 `qm template` makes the VM read-only. It cannot be started any more - that
@@ -464,16 +480,21 @@ is the point.
 ### 7.1 The full clone
 
 ```bash
-qm clone 9000 100 --name web01 --full --storage nfs-lab
-qm set 100 --scsi0 nfs-lab:vm-100-disk-0,discard=on,iothread=1 \
-  --cores 2 --memory 4096 --net0 virtio,bridge=vmbr0,tag=20 \
+qm clone 9101 9201 --name debian13-run-pve1 --full --storage local-lvm
+qm set 9201 --cores 2 --memory 4096 --net0 virtio,bridge=vmbr0,tag=20 \
   --agent "enabled=1,fstrim_cloned_disks=1" --onboot 1
-qm set 100 --ide2 local:cloudinit --ipconfig0 ip=dhcp \
-  --cicustom local:/tmp/ci-100.yaml
-qm start 100
+qm set 9201 --ide2 local:cloudinit --ipconfig0 ip=dhcp \
+  --cicustom local:/tmp/ci-9201.yaml
+qm start 9201
 ```
 
-Repeat for VM 101 `web02`.
+Repeat on **pve2** for VM 9202 `debian13-run-pve2`, from the template 9102
+that is on pve2. A template on the local storage of a node cannot be cloned
+onto a different one:
+
+```
+can't clone VM to node 'pve2' (VM uses local storage)
+```
 
 ### 7.2 The VLAN tag
 
@@ -481,16 +502,16 @@ Repeat for VM 101 `web02`.
 the segmentation exercise work with:
 
 ```bash
-qm config 100 | grep net0
+qm config 9201 | grep net0
 # net0: virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,tag=20
 ```
 
 ### 7.3 Verify
 
 ```bash
-qm config 100
-qm guest cmd 100 ping
-qm guest exec 100 -- ip -brief a
+qm config 9201
+qm guest cmd 9201 ping
+qm guest exec 9201 -- ip -brief a
 ```
 
 ---
@@ -534,41 +555,56 @@ that is the difference between a container and a VM.
 
 ## Task 9 - Clones and test environments
 
+The test guest is a clone of the template on **pve3** - template 9103:
+
 ```bash
-qm clone 9000 102 --name web-test --storage nfs-lab     # linked clone
-qm set 102 --cores 2 --memory 4096 --net0 virtio,bridge=vmbr0,tag=20 \
+qm clone 9103 9203 --name debian13-run-pve3 --full --storage local-lvm
+qm set 9203 --cores 2 --memory 4096 --net0 virtio,bridge=vmbr0,tag=20 \
   --agent "enabled=1,fstrim_cloned_disks=1"
-qm set 102 --ide2 local:cloudinit --ipconfig0 ip=dhcp \
-  --cicustom local:/tmp/ci-102.yaml
-qm start 102
+qm set 9203 --ide2 local:cloudinit --ipconfig0 ip=dhcp \
+  --cicustom local:/tmp/ci-9203.yaml
+qm start 9203
 ```
 
-The linked clone is visible in the disk line:
+The full clone is visible in the disk line - it has a disk of its own:
 
 ```bash
-qm config 102 | grep scsi0
-# scsi0: nfs-lab:vm-102-disk-0,iothread=1,discard=on   <- full clone
-# scsi0: nfs-lab:base-9000-disk-0,size=...             <- linked clone
+qm config 9203 | grep scsi0
+# scsi0: local-lvm:vm-9203-disk-1,iothread=1,discard=on   <- full clone
 ```
 
-A linked clone depends on the template. **Never delete the template while
-linked clones exist.**
+A **linked** clone would show the base disk of the template instead:
+
+```bash
+# scsi0: local-lvm:base-9103-disk-1,size=...              <- linked clone
+```
+
+A linked clone needs a storage that supports snapshots, and the shared NFS
+storage does not:
+
+```
+Linked clone feature is not supported for 'nfs-lab:9000/...'
+```
+
+That is why the templates live on the node-local `local-lvm`. A linked clone
+also depends on the template - **never delete the template while linked
+clones exist.**
 
 ---
 
 ## Task 10 - Snapshots and rollback
 
 ```bash
-qm snapshot 100 pre-update --description "before the Nordwind release"
+qm snapshot 9201 pre-update --description "before the Nordwind release"
 
 # make a change in the guest
-qm guest exec 100 -- sh -c 'echo "release-2.4" > /etc/nordwind-version'
+qm guest exec 9201 -- sh -c 'echo "release-2.4" > /etc/nordwind-version'
 
 # ... and undo it
-qm rollback 100 pre-update
-qm guest exec 100 -- cat /etc/nordwind-version   # the file is gone
+qm rollback 9201 pre-update
+qm guest exec 9201 -- cat /etc/nordwind-version   # the file is gone
 
-qm delsnapshot 100 pre-update
+qm delsnapshot 9201 pre-update
 ```
 
 A snapshot of a running guest with the agent enabled includes the memory
@@ -579,24 +615,31 @@ is stopped.
 
 ## Task 11 - Live migration
 
+The guests of the lab sit on the node-local `local-lvm`, so the migration
+is refused - and that refusal is the lesson:
+
 ```bash
-qm status 100
-qm migrate 100 pve2 --online
-qm status 100
-pvesh get /cluster/resources --type vm | grep 100
+qm status 9201
+qm migrate 9201 pve2 --online
+# can't migrate VM 9201 - local storage can't be used for live migration
 ```
 
-The migration only works because the disk is on `nfs-lab`. If a student
-tries to migrate a VM that is on `local-lvm`, the refusal is the lesson:
+A live migration needs the disk on **shared** storage, because the target
+node has to be able to open the same volume. Move the disk first:
 
-```
-migrate VMs with local disks are not supported
+```bash
+qm stop 9201
+qm move_disk 9201 scsi0 nfs-lab --target-directory vm-9201-disk-0
+qm start 9201
+qm migrate 9201 pve2 --online
+qm status 9201
+pvesh get /cluster/resources --type vm | grep 9201
 ```
 
 After the migration:
 
 ```bash
-qm guest cmd 100 ping          # the guest never noticed
+qm guest cmd 9201 ping          # the guest never noticed
 ```
 
 ---
@@ -615,7 +658,7 @@ pvesh set /cluster/firewall/options --enable 1 --policy_in DROP --policy_out ACC
 
 ```bash
 # The web tier reaches the database tier
-pvesh create /nodes/pve1/qemu/100/firewall/rules \
+pvesh create /nodes/pve1/qemu/9201/firewall/rules \
   --action ACCEPT --type in --dport 5432 --proto tcp --source 10.10.20.0/24 \
   --comment "web tier -> database tier"
 
@@ -631,8 +674,8 @@ The rule set on a VM/CT lives in
 ### 12.3 The VLAN tags
 
 ```bash
-qm set 100 --net0 virtio,bridge=vmbr0,tag=20
-qm set 101 --net0 virtio,bridge=vmbr0,tag=20
+qm set 9201 --net0 virtio,bridge=vmbr0,tag=20
+qm set 9202 --net0 virtio,bridge=vmbr0,tag=20
 pct set 300 --net0 name=eth0,bridge=vmbr0,tag=30,ip=dhcp
 pct set 301 --net0 name=eth0,bridge=vmbr0,tag=40,ip=dhcp
 ```
@@ -642,7 +685,7 @@ pct set 301 --net0 name=eth0,bridge=vmbr0,tag=40,ip=dhcp
 ```bash
 pvesh get /cluster/firewall/rules
 bridge vlan show
-cat /etc/pve/firewall/100.fw
+cat /etc/pve/firewall/9201.fw
 ```
 
 ---
@@ -654,7 +697,7 @@ cat /etc/pve/firewall/100.fw
 ```bash
 pvesh create /cluster/backup \
   --storage pbs-main \
-  --vmid 100,301 \
+  --vmid 9201,301 \
   --schedule daily \
   --mode snapshot \
   --enabled 1 \
@@ -670,7 +713,7 @@ backup is consistent even while the guest writes to it.
 ### 13.2 The manual backup
 
 ```bash
-vzdump 100 --storage pbs-main --mode snapshot
+vzdump 9201 --storage pbs-main --mode snapshot
 vzdump 301 --storage pbs-main --mode snapshot
 pvesm list pbs-main --content backup
 ```
@@ -679,7 +722,7 @@ pvesm list pbs-main --content backup
 
 ```bash
 # Restore into a NEW VMID as a linked clone, so the original is untouched
-qmrestore pbs-main:backup/vm/100/2026-11-10T02:00:00Z 190 --storage nfs-lab
+qmrestore pbs-main:backup/vm/9201/2026-11-10T02:00:00Z 190 --storage nfs-lab
 qm set 190 --net0 virtio,bridge=vmbr0,tag=20
 qm start 190
 qm guest cmd 190 ping
@@ -704,8 +747,8 @@ pvesm list pbs-main --content backup
 ```bash
 ha-manager add group prod-nodes --nodes pve1,pve2,pve3
 
-ha-manager add vm:100  --group prod-nodes --max_restart 3 --max_relocate 2
-ha-manager add vm:101  --group prod-nodes --max_restart 3 --max_relocate 2
+ha-manager add vm:9201  --group prod-nodes --max_restart 3 --max_relocate 2
+ha-manager add vm:9202  --group prod-nodes --max_restart 3 --max_relocate 2
 ha-manager add ct:301  --group prod-nodes --max_restart 3 --max_relocate 2
 
 ha-manager status
@@ -789,17 +832,17 @@ The guest is unreachable. Before touching anything:
 
 ```bash
 # 1. Preserve the evidence
-qm snapshot 100 incident-2026-11-10 --description "before the diagnosis"
+qm snapshot 9201 incident-2026-11-10 --description "before the diagnosis"
 
 # 2. Which layer?
-qm status 100                       # is the guest running at all?
-qm showcmd 100 | head -5            # is QEMU running with the right devices?
-qm guest cmd 100 ping               # does the agent answer?
+qm status 9201                       # is the guest running at all?
+qm showcmd 9201 | head -5            # is QEMU running with the right devices?
+qm guest cmd 9201 ping               # does the agent answer?
 
 # If the guest runs but has no network:
-qm guest exec 100 -- ip -brief a
-qm guest exec 100 -- ip route
-qm guest exec 100 -- cat /etc/resolv.conf
+qm guest exec 9201 -- ip -brief a
+qm guest exec 9201 -- ip route
+qm guest exec 9201 -- cat /etc/resolv.conf
 
 # If the host is at fault:
 journalctl -u pvedaemon -u pveproxy --since "10 min ago" --no-pager
@@ -811,21 +854,21 @@ pvesm status
 
 ```bash
 # Break it: stop the guest agent
-qm guest exec 100 -- systemctl stop qemu-guest-agent
+qm guest exec 9201 -- systemctl stop qemu-guest-agent
 
 # Diagnose
-qm guest cmd 100 ping        # times out - the agent is gone
+qm guest cmd 9201 ping        # times out - the agent is gone
 journalctl -u pveproxy --since "5 min ago" --no-pager | tail
 
 # Fix
-qm guest exec 100 -- systemctl start qemu-guest-agent
-qm guest cmd 100 ping        # answers again
+qm guest exec 9201 -- systemctl start qemu-guest-agent
+qm guest cmd 9201 ping        # answers again
 ```
 
 ### 16.4 The write-up
 
 ```bash
-pvesh get /cluster/log --limit 100 --output-format json | \
+pvesh get /cluster/log --limit 9201 --output-format json | \
   jq -r '.[] | "\(.time) \(.username) \(.cmd)"'
 ```
 
@@ -872,32 +915,35 @@ pvesm add pbs pbs-main --server 10.20.2.21 --datastore main \
 pveum realm add ad-corp --type pve
 pveum user add jsmith@ad-corp --password "${JSMITH_PASSWORD}"
 pveum role add VM-Operator -privs "VM.Console,VM.PowerMgmt,VM.Monitor"
-pveum acl modify /vms/100 --users jsmith@ad-corp --roles VM-Operator
-pveum acl modify /vms/101 --users jsmith@ad-corp --roles VM-Operator
+pveum acl modify /vms/9201 --users jsmith@ad-corp --roles VM-Operator
+pveum acl modify /vms/9202 --users jsmith@ad-corp --roles VM-Operator
 pveum user token add automation@pve terraform --privsep 1
-pveum acl modify /vms/100 --tokens 'automation@pve!terraform' --roles VM-Operator
+pveum acl modify /vms/9201 --tokens 'automation@pve!terraform' --roles VM-Operator
 
 # --- Task 6 ------------------------------------------------------------
-pvesm download-url nfs-lab https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2 debian-13-genericcloud.qcow2
-qm create 9000 --name debian13-template --memory 2048 --cores 2 \
+curl -fSL -o /var/lib/vz/template/iso/debian-13-generic-amd64.qcow2 \
+  https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
+qm create 9101 --name debian13-tpl-pve1 --memory 2048 --cores 2 \
   --net0 virtio,bridge=vmbr0 --scsihw virtio-scsi-single --ostype l26 \
   --machine q35 --bios ovmf --agent "enabled=1,fstrim_cloned_disks=1" \
   --tablet 1 --onboot 1 --ide2 local:cloudinit --ipconfig0 ip=dhcp
-qm importdisk 9000 nfs-lab:debian-13-genericcloud.qcow2 nfs-lab
-qm set 9000 --scsi0 nfs-lab:vm-9000-disk-0,discard=on,iothread=1 \
-  --efidisk0 nfs-lab:1,efitype=4m,pre-enrolled-keys=1 --boot order=scsi0
-qm set 9000 --cicustom local:/tmp/ci-9000.yaml
-qm start 9000
-qm template 9000
+qm set 9101 --efidisk0 local-lvm:1,efitype=4m,pre-enrolled-keys=1
+qm importdisk 9101 /var/lib/vz/template/iso/debian-13-generic-amd64.qcow2 local-lvm
+IMPORTED=$(qm config 9101 | grep '^unused0:' | sed 's/^unused0: //' | cut -d, -f1)
+qm set 9101 --scsi0 "${IMPORTED},discard=on,iothread=1" --boot order=scsi0
+qm set 9101 --delete unused0
+qm config 9101 | grep scsi0        # must be size=3G
+qm set 9101 --cicustom local:/tmp/ci-9101.yaml
+qm start 9101
+qm template 9101
 
 # --- Task 7 ------------------------------------------------------------
-qm clone 9000 100 --name web01 --full --storage nfs-lab
-qm set 100 --cores 2 --memory 4096 --net0 virtio,bridge=vmbr0,tag=20 \
-  --scsi0 nfs-lab:vm-100-disk-0,discard=on,iothread=1 \
+qm clone 9101 9201 --name debian13-run-pve1 --full --storage local-lvm
+qm set 9201 --cores 2 --memory 4096 --net0 virtio,bridge=vmbr0,tag=20 \
   --agent "enabled=1,fstrim_cloned_disks=1" --onboot 1
-qm set 100 --cicustom local:/tmp/ci-100.yaml
-qm start 100
-# ... the same for 101 / web02
+qm set 9201 --cicustom local:/tmp/ci-9201.yaml
+qm start 9201
+# ... the same on pve2: template 9102 -> guest 9202
 
 # --- Task 8 ------------------------------------------------------------
 pvesm download-url nfs-lab http://download.proxmox.com/images/system/debian-13-standard_13.6-1_amd64.tar.zst debian-13-standard_13.6-1_amd64.tar.zst
@@ -909,37 +955,37 @@ pct create 300 local:vztmpl/debian-13-standard_13.6-1_amd64.tar.zst \
 # ... the same for 301 / db01 (tag 40) and 302 / cache01 (tag 30)
 
 # --- Task 9 ------------------------------------------------------------
-qm clone 9000 102 --name web-test --storage nfs-lab
-qm set 102 --cores 2 --memory 4096 --net0 virtio,bridge=vmbr0,tag=20 \
-  --agent "enabled=1,fstrim_cloned_disks=1" --cicustom local:/tmp/ci-102.yaml
-qm start 102
+qm clone 9101 9203 --name debian13-run-pve3 --storage nfs-lab
+qm set 9203 --cores 2 --memory 4096 --net0 virtio,bridge=vmbr0,tag=20 \
+  --agent "enabled=1,fstrim_cloned_disks=1" --cicustom local:/tmp/ci-9203.yaml
+qm start 9203
 
 # --- Task 10 -----------------------------------------------------------
-qm snapshot 100 pre-update --description "before the release"
-qm guest exec 100 -- sh -c 'echo release-2.4 > /etc/nordwind-version'
-qm rollback 100 pre-update
-qm delsnapshot 100 pre-update
+qm snapshot 9201 pre-update --description "before the release"
+qm guest exec 9201 -- sh -c 'echo release-2.4 > /etc/nordwind-version'
+qm rollback 9201 pre-update
+qm delsnapshot 9201 pre-update
 
 # --- Task 11 -----------------------------------------------------------
-qm migrate 100 pve2 --online
+qm migrate 9201 pve2 --online
 
 # --- Task 12 -----------------------------------------------------------
 pvesh set /cluster/firewall/options --enable 1 --policy_in DROP --policy_out ACCEPT
-pvesh create /nodes/pve1/qemu/100/firewall/rules --action ACCEPT --type in \
+pvesh create /nodes/pve1/qemu/9201/firewall/rules --action ACCEPT --type in \
   --dport 5432 --proto tcp --source 10.10.20.0/24
 
 # --- Task 13 -----------------------------------------------------------
-pvesh create /cluster/backup --storage pbs-main --vmid 100,301 \
+pvesh create /cluster/backup --storage pbs-main --vmid 9201,301 \
   --schedule daily --mode snapshot --enabled 1 --compress zstd \
   --retention-keep-daily 7 --retention-keep-weekly 4 --retention-keep-monthly 6
-vzdump 100 --storage pbs-main --mode snapshot
+vzdump 9201 --storage pbs-main --mode snapshot
 vzdump 301 --storage pbs-main --mode snapshot
-qmrestore pbs-main:backup/vm/100/<timestamp> 190 --storage nfs-lab
+qmrestore pbs-main:backup/vm/9201/<timestamp> 190 --storage nfs-lab
 
 # --- Task 14 -----------------------------------------------------------
 ha-manager add group prod-nodes --nodes pve1,pve2,pve3
-ha-manager add vm:100 --group prod-nodes --max_restart 3 --max_relocate 2
-ha-manager add vm:101 --group prod-nodes --max_restart 3 --max_relocate 2
+ha-manager add vm:9201 --group prod-nodes --max_restart 3 --max_relocate 2
+ha-manager add vm:9202 --group prod-nodes --max_restart 3 --max_relocate 2
 ha-manager add ct:301 --group prod-nodes --max_restart 3 --max_relocate 2
 
 # --- Task 15 -----------------------------------------------------------
@@ -948,8 +994,8 @@ pvesh create /cluster/notifications/matchers/system-mail --type sentry \
   --notification-template all
 
 # --- Task 16 -----------------------------------------------------------
-qm snapshot 100 incident --description "before the diagnosis"
-qm guest cmd 100 ping
+qm snapshot 9201 incident --description "before the diagnosis"
+qm guest cmd 9201 ping
 journalctl -u pveproxy --since "10 min ago" --no-pager
 ```
 
@@ -966,6 +1012,6 @@ journalctl -u pveproxy --since "10 min ago" --no-pager
 | The clone has the template's hostname | The cloud-init drive was not replaced | `qm set <id> --cicustom local:/tmp/ci-<id>.yaml` |
 | `migrate VMs with local disks are not supported` | The disk is on `local-lvm` | Move it to `nfs-lab` - this is the lesson |
 | `cannot add HA managed resource: storage is not shared` | Same reason | The disk has to be on `nfs-lab` |
-| The restore fails with `VM 100 already exists` | The restore target VMID is taken | Restore into a new VMID |
+| The restore fails with `VM 9201 already exists` | The restore target VMID is taken | Restore into a new VMID |
 | The web UI shows a certificate warning | The default self-signed certificate | `pvenode acme cert order --acme selfsigned` |
 | The web UI is unreachable after enabling the firewall | The rules were written after the default deny | Write the rules first, keep an SSH session open |

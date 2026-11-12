@@ -154,7 +154,7 @@ fi
 # =============================================================================
 printf '\n%s--- The high availability%s\n' "${EX_C_CYAN}" "${EX_C_RESET}"
 
-for res in vm:100 vm:101 vm:102 ct:300 ct:301 ct:302; do
+for res in vm:9201 vm:9202 vm:9203 ct:300 ct:301 ct:302; do
     if ex_out "ha-manager status --output-format json 2>/dev/null" | grep -q "\"${res}\""; then
         printf '  removing the HA resource %s\n' "${res}"
         run ex_run "ha-manager rm ${res}" >/dev/null 2>&1
@@ -215,7 +215,7 @@ if [ "${RESET_FIREWALL}" -eq 1 ]; then
     done
 
     # The guest level rules live in their own files.
-    for f in /etc/pve/firewall/100.fw /etc/pve/firewall/101.fw /etc/pve/firewall/102.fw \
+    for f in /etc/pve/firewall/9201.fw /etc/pve/firewall/9202.fw /etc/pve/firewall/9203.fw \
              /etc/pve/firewall/300.fw /etc/pve/firewall/301.fw /etc/pve/firewall/302.fw; do
         if ex_out "test -f ${f}" | grep -q .; then
             printf '  removing %s\n' "${f}"

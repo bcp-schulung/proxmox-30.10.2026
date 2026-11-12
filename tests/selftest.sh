@@ -103,9 +103,11 @@ assert_eq "VPC gateway"                        "10.20.0.1"    "${VPC_GATEWAY}"
 assert_eq "cluster name"                       "prod-cluster" "${PVE_CLUSTER_NAME}"
 assert_eq "guest overlay"                      "10.10.10.0/24" "${GUEST_SUBNET_CIDR}"
 assert_eq "the SSH key path is derived"        "${LAB_STATE_DIR}/keys/pve-lab.pem" "${PVE_SSH_KEY_PATH}"
-assert_eq "the deck's VM IDs are used"         "100" "${VM_WEB_ID}"
-assert_eq "the deck's template ID is used"     "9000" "${VM_TEMPLATE_ID}"
-assert_eq "the deck's CT ID is used"           "300" "${CT_APP_ID}"
+assert_eq "the guest VM ID is used"              "9201" "${VM_WEB_ID}"
+assert_eq "the first template ID is used"        "9101" "${VM_TEMPLATE_ID}"
+assert_eq "the second template ID is used"       "9102" "${VM_TEMPLATE_ID_2}"
+assert_eq "the third template ID is used"        "9103" "${VM_TEMPLATE_ID_3}"
+assert_eq "the deck's CT ID is used"             "300" "${CT_APP_ID}"
 
 # An exported environment variable must win over the defaults.
 (

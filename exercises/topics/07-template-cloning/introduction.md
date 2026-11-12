@@ -42,10 +42,13 @@ reads the base disk; writing one creates a new block in the clone's own
 file. Deleting the base breaks every linked clone.
 
 ```bash
-qm config 102 | grep scsi0
-# scsi0: nfs-lab:base-9000-disk-0,size=32G     <- linked
-# scsi0: nfs-lab:vm-102-disk-0,size=32G        <- full
+qm config 9203 | grep scsi0
+# scsi0: local-lvm:vm-9203-disk-1,size=3G        <- full clone
+# scsi0: local-lvm:base-9101-disk-1,size=3G      <- linked clone
 ```
+
+> The lab uses full clones. A linked clone needs a storage that supports
+> snapshots, and NFS does not - see [topic 10](../10-clone-strategies/).
 
 ## 3. The cloud-init trap
 
@@ -63,8 +66,8 @@ credentials.
 The fix is to give every clone its own cloud-init drive:
 
 ```bash
-qm set 102 --ide2 local:cloudinit --ipconfig0 ip=dhcp \
-  --cicustom local:/tmp/ci-102.yaml
+qm set 9203 --ide2 local:cloudinit --ipconfig0 ip=dhcp \
+  --cicustom local:/tmp/ci-9203.yaml
 ```
 
 The `local:` prefix means the snippet lives on the node's local storage,
@@ -93,13 +96,23 @@ what turns a "stop" into a graceful shutdown.
 
 ## 5. What you do
 
-1. Download a Debian cloud image into the shared storage.
-2. Create the VM 9000 with the correct machine type, controller and guest
+The lab is pre-provisioned with a template on every node, but the exercise is to
+build one yourself:
+
+1. Download a Debian cloud image into the node's ISO directory. **It is a qcow2
+   disk, not an ISO** - it cannot be referenced as `local:iso/<file>.qcow2`.
+2. Create the VM 9101 with the correct machine type, controller and guest
    agent settings.
-3. Import the disk and attach it.
-4. Attach a cloud-init drive with the right snippet.
-5. Boot it, verify the guest agent answers, and shut it down.
-6. Convert it into a template.
+3. Create the EFI vars disk, **before** the import.
+4. Import the disk with `qm importdisk` and attach it - reading the volume
+   name back out of the config rather than guessing the disk number.
+5. Attach a cloud-init snippet.
+6. Boot it, verify the guest agent answers, and shut it down.
+7. Convert it into a template.
+
+Then repeat it on the other two nodes. Every node needs its own template,
+because a template on the local storage of a node cannot be cloned onto a
+different one.
 
 ## 6. How it is checked
 

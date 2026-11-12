@@ -396,7 +396,14 @@ pve_download() {
 # pve_write_cloudinit <host> <vmid> <hostname> <ssh-public-key> <password>
 pve_write_cloudinit() {
     local host="$1" vmid="$2" guest_hostname="$3" sshkey="$4" password="$5"
-    local remote="/tmp/ci-${vmid}.yaml"
+
+    # The file has to be in the snippets directory of the node: the
+    # 'cicustom' option expects the value 'user=local:snippets/<file>',
+    # and a path outside the snippets directory is refused with
+    #
+    #   volume 'local:snippets/ci-9101.yaml' does not exist
+    #
+    local remote="snippets/ci-${vmid}.yaml"
     local content
     content="$(cat << EOF
 #cloud-config
@@ -423,8 +430,172 @@ runcmd:
   - [ sh, -c, "printf 'provisioned-by-proxmox-seminar-lab\\n' > /etc/lab-provisioned" ]
 EOF
 )"
-    printf '%s\n' "${content}" | pve_exec "${host}" "cat > '${remote}' && chmod 600 '${remote}'"
+    # The file is written through the snippet directory, with the
+    # permissions that Proxmox expects.
+    printf '%s\n' "${content}" | \
+        pve_exec "${host}" "sudo mkdir -p /var/lib/vz/snippets && sudo tee /var/lib/vz/${remote} > /dev/null && sudo chmod 600 /var/lib/vz/${remote}"
     printf '%s' "${remote}"
+}
+
+# Create the per-node template.
+#
+# pve_vm_create_local_template <host> <vmid> <name> <storage> <qcow2-image>
+#
+# The template holds the disk on the local LVM-thin storage of the node.
+#
+# A template on the node's own local storage satisfies both clone
+# constraints:
+#
+#   A linked clone is a snapshot of the template's disk, and a snapshot is
+#   only possible on a storage that supports them. NFS does not, and the
+#   request is refused with
+#
+#     Linked clone feature is not supported for 'nfs-lab:9000/...'
+#
+#   A full clone can be moved to another node only when the source is on
+#   shared storage, so a template on a node's local storage must NOT be
+#   cloned onto a different node:
+#
+#     can't clone VM to node 'pve2' (VM uses local storage)
+#
+# The image is a qcow2 DISK, not an ISO. It cannot be referenced as
+# 'local:iso/<file>.qcow2', because the 'iso/' subdirectory of a directory
+# storage only accepts real ISO extensions and the volume-name parser
+# refuses it with
+#
+#   unable to parse directory volume name 'iso/debian-13-generic-amd64.qcow2'
+#
+# It is brought in with 'qm importdisk', which takes a plain path.
+#
+# The disk number that 'qm importdisk' picks is NOT the one to assume: with
+# an 'efidisk0' already attached, the EFI vars volume takes disk-0 and the
+# imported OS disk lands on disk-1. Attaching disk-0 to scsi0 produces a
+# template that boots a 4 MB EFI partition instead of Debian, and it looks
+# correct at first glance because the size is read from the config rather
+# than from the volume. The imported volume is therefore read back out of
+# 'unused0' instead of being guessed.
+pve_vm_create_local_template() {
+    local host="$1" vmid="$2" name="$3" storage="$4" image="$5"
+
+    log_info "Creating the template ${vmid} (${name}) on ${host}"
+    pve_cmd "${host}" qm create "${vmid}" \
+        --name "${name}" \
+        --memory "${GUEST_MEM_MB}" \
+        --cores "${GUEST_CORES}" \
+        --sockets 1 \
+        --net0 "virtio,bridge=vmbr0" \
+        --scsihw virtio-scsi-single \
+        --ostype l26 \
+        --machine q35 \
+        --bios ovmf \
+        --agent "enabled=1,fstrim_cloned_disks=1" \
+        --tablet 1 \
+        --onboot 0 \
+        --protection 0
+
+    # The EFI vars disk. It is created BEFORE the import, so that the
+    # imported OS disk gets a disk number of its own.
+    pve_cmd "${host}" qm set "${vmid}" \
+        --efidisk0 "${storage}:1,efitype=4m,pre-enrolled-keys=1"
+
+    # The import moves 3 GB and takes minutes. It runs detached, so that
+    # it is not killed when the SSH session drops.
+    pve_cmd_detached "${host}" "qm importdisk ${vmid} ${image} ${storage}" 3600
+
+    # Read the name of the imported volume back instead of guessing it.
+    local imported
+    imported="$(pve_cmd_out "${host}" \
+        "qm config ${vmid} | grep '^unused0:' | sed 's/^unused0: //' | cut -d, -f1" 2>/dev/null | tr -d '[:space:]')"
+
+    if [ -z "${imported}" ]; then
+        log_error "The import did not produce a disk for VM ${vmid}"
+        return 1
+    fi
+
+    pve_cmd "${host}" qm set "${vmid}" \
+        --scsi0 "${imported},discard=on,iothread=1" \
+        --boot "order=scsi0"
+
+    # The volume that was imported is now attached. Remove the reference
+    # to the unused disk without touching the volume itself.
+    pve_cmd "${host}" qm set "${vmid}" --delete unused0 2>/dev/null || true
+
+    pve_vm_make_template "${host}" "${vmid}"
+}
+
+# Run a long command on a node, detached from the SSH session.
+#
+# pve_cmd_detached <host> <command> [timeout-seconds]
+#
+# A long operation - the import of a 3 GB guest image, a clone of a disk
+# over NFS - outlives the SSH connection that started it. When the
+# connection drops, the process on the node is killed with it, and the
+# operation stops halfway: the volume exists, but it is only partly
+# written.
+#
+# The command is therefore started with 'setsid' and redirected to a log
+# file, so that it keeps running when the session ends. The harness then
+# waits for the log to show that the command finished.
+pve_cmd_detached() {
+    local host="$1" cmd="$2" timeout="${3:-1800}"
+    local logfile="/var/log/lab-detached-$$.log"
+
+    log_info "Starting a long operation on ${host} (detached)"
+
+    # The command runs in its own session, with its output in a log.
+    #
+    # The 'sudo' is applied to the whole thing with a single call, so
+    # that the detached process runs as root. It cannot be applied to
+    # the inner command alone: pve_cmd already prefixes the command
+    # line with sudo, and a second sudo inside a detached shell would
+    # wait for a password that never comes.
+    # The redirection has to happen inside the sudo. The admin user
+    # cannot write to /var/log, so a redirection that is made outside
+    # the sudo fails with "Permission denied" and the log is never
+    # created.
+    # The helper script does the work. Doing it with a nested quoting
+    # in the command line is fragile: the redirection has to happen
+    # inside the sudo, because the admin user cannot write to /var/log.
+    # The command is passed as one argument. The quoting has to survive
+    # the shell on both sides: the command itself contains single quotes
+    # (--name 'debian13-run-pve1'), so it is passed through the environment of the
+    # helper rather than through the command line.
+    # The command is written into a file on the node, and the helper
+    # reads it from there. Passing the command on the command line is
+    # fragile: the command itself contains single quotes (--name
+    # 'debian13-run-pve1'), and every layer of shell would have to be escaped
+    # correctly.
+    local script="/tmp/lab-cmd-$$.sh"
+    printf '%s\n' "${cmd}" | \
+        pve_exec "${host}" "sudo tee ${script} > /dev/null && sudo chmod 700 ${script}"
+
+    pve_exec "${host}" "sudo bash /usr/local/sbin/lab-detached ${logfile} ${script}"
+
+    # The harness polls the log file for the marker that the command
+    # wrote when it finished.
+    local waited=0
+    while [ "${waited}" -lt "${timeout}" ]; do
+        local out
+        out="$(pve_cmd_out "${host}" "cat ${logfile} 2>/dev/null || true" 2>/dev/null || true)"
+
+        if printf '%s' "${out}" | grep -q 'LAB_DONE'; then
+            # The command finished. The output without the marker is
+            # shown, so that an error is visible.
+            printf '%s' "${out}" | sed 's/LAB_DONE.*//' | grep -v '^$' && true
+            if printf '%s' "${out}" | grep -q 'LAB_FAILED'; then
+                die "The long operation on ${host} failed."
+            fi
+            log_ok "The long operation on ${host} finished"
+            pve_cmd "${host}" "rm -f ${logfile}" >/dev/null 2>&1 || true
+            return 0
+        fi
+
+        sleep 10
+        waited=$(( waited + 10 ))
+    done
+
+    log_warn "The long operation on ${host} did not finish within ${timeout} seconds"
+    return 1
 }
 
 # Create the golden-image VM and import the cloud image into it.
@@ -449,7 +620,9 @@ pve_vm_create_from_cloudimage() {
         --protection 0
 
     log_info "Importing the guest image into VM ${vmid}"
-    pve_cmd "${host}" qm importdisk "${vmid}" "${image}" "${storage}"
+    # The import moves 3 GB and takes minutes. It runs detached, so that
+    # it is not killed when the SSH session drops.
+    pve_cmd_detached "${host}" "qm importdisk ${vmid} ${image} ${storage}" 3600
 
     pve_cmd "${host}" qm set "${vmid}" \
         --scsi0 "${storage}:vm-${vmid}-disk-0,discard=on,iothread=1" \
@@ -457,7 +630,7 @@ pve_vm_create_from_cloudimage() {
         --boot "order=scsi0" \
         --ide2 "local:cloudinit" \
         --ipconfig0 "ip=dhcp" \
-        --cicustom "${ciyaml}"
+        --cicustom "user=local:${ciyaml}"
 }
 
 # Convert a VM into a template.
@@ -479,7 +652,7 @@ pve_vm_make_template() {
 # of a template is only known to the node that owns it, and the other
 # node answers with
 #
-#   unable to find configuration file for VM 9000 on node 'pve2'
+#   unable to find configuration file for VM 9101 on node 'pve2'
 #
 pve_vm_clone() {
     local host="$1" src="$2" newid="$3" name="$4" storage="$5" mode="$6"
@@ -506,17 +679,33 @@ pve_vm_clone() {
         storage_opt="--storage ${storage}"
     fi
 
-    pve_cmd "${host}" "qm clone ${src} ${newid} --name '${name}' --full ${full} ${storage_opt} ${target_opt}"
+    # A full clone copies 3 GB. It runs detached, so that it is not
+    # killed when the SSH session drops.
+    if [ "${full}" = "1" ]; then
+        # The marker is added by the helper script, according to the
+        # exit code of the command. It must not be part of the command
+        # itself: a chain like 'cmd && echo DONE || echo FAILED' reports
+        # the result of the last command of the chain, not the result of
+        # the clone.
+        pve_cmd_detached "${host}" \
+            "qm clone ${src} ${newid} --name '${name}' --full 1 ${storage_opt} ${target_opt}" \
+            3600
+    else
+        pve_cmd "${host}" "qm clone ${src} ${newid} --name '${name}' --full 0 ${target_opt}"
+    fi
 }
 
 # Apply the cloud-init configuration to a clone (clones inherit the drive but
 # need their own hostname and credentials).
 pve_vm_set_cloudinit() {
     local host="$1" vmid="$2" guest_hostname="$3" ciyaml="$4"
+    # The cicustom option takes a key=value pair: the file is
+    # identified by the storage and the path inside the snippets
+    # directory.
     pve_cmd "${host}" qm set "${vmid}" \
         --ide2 "local:cloudinit" \
         --ipconfig0 "ip=dhcp" \
-        --cicustom "${ciyaml}"
+        --cicustom "user=local:${ciyaml}"
 }
 
 # Create an unprivileged LXC container.

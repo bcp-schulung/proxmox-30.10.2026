@@ -17,15 +17,15 @@ not know the difference.
 ```
    16 vCPU on the node
         │
-        ├── VM 100: 2 cores, cpulimit 2, cpuunits 2048
-        ├── VM 101: 2 cores, cpulimit 4
+        ├── VM 9201: 2 cores, cpulimit 2, cpuunits 2048
+        ├── VM 9202: 2 cores, cpulimit 4
         └── CT 300: 1 core,  cpus 1
 ```
 
 ## 2. The CPU
 
 ```bash
-qm set 100 --sockets 1 --cores 4 --cpulimit 2 --cpuunits 2048
+qm set 9201 --sockets 1 --cores 4 --cpulimit 2 --cpuunits 2048
 ```
 
 | Option | Meaning |
@@ -53,7 +53,7 @@ guest with 1024 under contention.
 ## 3. The memory
 
 ```bash
-qm set 100 --memory 8192 --balloon 4096
+qm set 9201 --memory 8192 --balloon 4096
 ```
 
 | Option | Meaning |
@@ -74,30 +74,30 @@ has to process the change. On a database with a large working set that
 means a page fault storm at exactly the wrong moment.
 
 ```bash
-qm set 100 --balloon 0
+qm set 9201 --balloon 0
 ```
 
 ## 4. The disk
 
 ```bash
-qm resize 100 scsi0 +20G          # grow
-qm set 100 --scsi1 nfs-lab:50     # add a second disk
+qm resize 9201 scsi0 +20G          # grow
+qm set 9201 --scsi1 nfs-lab:50     # add a second disk
 ```
 
 A grow is visible in the guest immediately - the guest's partition and
 filesystem have to be grown separately:
 
 ```bash
-qm guest exec 100 -- lsblk
-qm guest exec 100 -- growpart /dev/sda 1
-qm guest exec 100 -- resize2fs /dev/sda1
+qm guest exec 9201 -- lsblk
+qm guest exec 9201 -- growpart /dev/sda 1
+qm guest exec 9201 -- resize2fs /dev/sda1
 ```
 
 ## 5. The hotplug
 
 ```bash
-qm set 100 --scsi1 nfs-lab:50    # added live
-qm set 100 --delete scsi1
+qm set 9201 --scsi1 nfs-lab:50    # added live
+qm set 9201 --delete scsi1
 ```
 
 Proxmox supports the hotplug of disks and network interfaces. The CPU and
@@ -105,10 +105,10 @@ the memory do not support it - those changes need a reboot.
 
 ## 6. What you do
 
-1. Set the CPU limit and the weight on VM 100.
-2. Configure the memory with a balloon on VM 100 and without one on the
+1. Set the CPU limit and the weight on VM 9201.
+2. Configure the memory with a balloon on VM 9201 and without one on the
    database container.
-3. Grow the disk of VM 100 and verify it inside the guest.
+3. Grow the disk of VM 9201 and verify it inside the guest.
 4. Add and remove a second disk.
 
 ## 7. How it is checked

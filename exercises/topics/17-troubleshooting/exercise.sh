@@ -37,10 +37,10 @@ esac
 # =============================================================================
 ex_section "The forensic snapshot"
 
-snaps="$(ex_out "qm listsnapshot 100 2>/dev/null")"
+snaps="$(ex_out "qm listsnapshot 9201 2>/dev/null")"
 ex_assert_contains "a snapshot named incident exists" "${snaps}" "incident"
 
-desc="$(ex_out "qm listsnapshot 100 2>/dev/null | grep 'incident' | sed 's/.*incident[[:space:]]*//'")"
+desc="$(ex_out "qm listsnapshot 9201 2>/dev/null | grep 'incident' | sed 's/.*incident[[:space:]]*//'")"
 ex_assert_not_empty "the incident snapshot carries a description" "${desc}"
 
 # =============================================================================
@@ -49,13 +49,13 @@ ex_assert_not_empty "the incident snapshot carries a description" "${desc}"
 ex_section "The diagnosis"
 
 status="$(ex_guest_status vm 100)"
-ex_assert_eq "VM 100 is running" "running" "${status}"
+ex_assert_eq "VM 9201 is running" "running" "${status}"
 
 if [ "${status}" = "running" ]; then
     # The agent answering proves that the QEMU process, the virtio-serial
     # channel and the hypervisor are all healthy - the fault was inside
     # the guest, not on the host.
-    if ex_ok "qm guest cmd 100 ping >/dev/null 2>&1"; then
+    if ex_ok "qm guest cmd 9201 ping >/dev/null 2>&1"; then
         ex_pass "the guest agent answers - the host layer was not the problem"
     else
         ex_fail "the guest agent answers - the host layer was not the problem"
@@ -77,13 +77,13 @@ fi
 ex_section "The repair"
 
 if [ "${status}" = "running" ]; then
-    agent="$(ex_out "qm guest exec 100 -- systemctl is-active qemu-guest-agent 2>/dev/null | tr -d '\\r'")"
+    agent="$(ex_out "qm guest exec 9201 -- systemctl is-active qemu-guest-agent 2>/dev/null | tr -d '\\r'")"
     ex_assert_eq "the guest agent is active inside the guest" "active" "${agent}"
 
-    failed="$(ex_out "qm guest exec 100 -- systemctl --failed --no-legend 2>/dev/null | tr -d '\\r'")"
+    failed="$(ex_out "qm guest exec 9201 -- systemctl --failed --no-legend 2>/dev/null | tr -d '\\r'")"
     ex_assert_empty "the guest has no failed units" "${failed}"
 
-    hostname="$(ex_out "qm guest exec 100 -- hostname 2>/dev/null | tr -d '\\r'")"
+    hostname="$(ex_out "qm guest exec 9201 -- hostname 2>/dev/null | tr -d '\\r'")"
     ex_assert_not_empty "the guest is functional and answers" "${hostname}"
 else
     ex_skip "the repair checks (the guest is not running)"
@@ -95,7 +95,7 @@ fi
 ex_section "The documentation"
 
 log="$(ex_out "pvesh get /cluster/log --limit 200 --output-format json 2>/dev/null \
-    | grep -c 'vms/100'")"
+    | grep -c 'vms/9201'")"
 case "${log}" in
     ''|*[!0-9]*) ex_skip "the task log cannot be counted" ;;
     *)
@@ -108,7 +108,7 @@ case "${log}" in
 esac
 
 # The evidence must still be there.
-snaps="$(ex_out "qm listsnapshot 100 2>/dev/null")"
+snaps="$(ex_out "qm listsnapshot 9201 2>/dev/null")"
 ex_assert_contains "the incident snapshot still exists - the evidence was not destroyed" \
     "${snaps}" "incident"
 

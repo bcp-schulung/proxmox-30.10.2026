@@ -56,16 +56,16 @@ ex_section "The managed resources"
 managed="$(ex_out "ha-manager status 2>/dev/null")"
 ex_assert_not_empty "the HA status is readable" "${managed}"
 
-ex_assert_contains "VM 100 is HA managed" "${managed}" "100"
-ex_assert_contains "VM 101 is HA managed" "${managed}" "101"
+ex_assert_contains "VM 9201 is HA managed" "${managed}" "9201"
+ex_assert_contains "VM 9202 is HA managed" "${managed}" "9202"
 ex_assert_contains "CT 301 is HA managed" "${managed}" "301"
 
 # The state of each resource.
 #
 # The filter is built on the node, so the resource ID can be put into it
-# directly. The ID contains a colon ('vm:100'), which is safe inside a
+# directly. The ID contains a colon ('vm:9201'), which is safe inside a
 # jq string.
-for res in vm:100 vm:101 ct:301; do
+for res in vm:9201 vm:9202 ct:301; do
     state="$(ex_out "ha-manager status --output-format json 2>/dev/null \
         | /opt/exercises/lib/ex-json.sh '.[] | select(.id == \"${res}\") | .status'")"
     ex_assert_eq "${res} is in the started state" "started" "${state}"
@@ -90,7 +90,7 @@ esac
 # =============================================================================
 ex_section "The policies"
 
-for res in vm:100 vm:101 ct:301; do
+for res in vm:9201 vm:9202 ct:301; do
     maxrestart="$(ex_out "ha-manager config --${res} --output-format json 2>/dev/null \
         | /opt/exercises/lib/ex-json.sh '.max_restart // 0'")"
     case "${maxrestart}" in
@@ -120,14 +120,18 @@ done
 
 # =============================================================================
 # The preconditions
+#
+# HA needs shared storage: the resource has to be able to move to another
+# node, and the target node has to be able to open the same volume. The
+# guests of the lab start on the node-local 'local-lvm', so the exercise
+# moves them to 'nfs-lab' first. The containers are on 'nfs-lab' already.
 # =============================================================================
 ex_section "The preconditions"
 
-disk100="$(ex_out "qm config 100 2>/dev/null | grep '^scsi0:'")"
-ex_assert_contains "the managed VM 100 is on the shared storage" "${disk100}" "nfs-lab"
-
-disk101="$(ex_out "qm config 101 2>/dev/null | grep '^scsi0:'")"
-ex_assert_contains "the managed VM 101 is on the shared storage" "${disk101}" "nfs-lab"
+for id in ${NW_VM_IDS}; do
+    disk="$(ex_out "qm config ${id} 2>/dev/null | grep '^scsi0:'")"
+    ex_assert_contains "the managed VM ${id} is on the shared storage" "${disk}" "nfs-lab"
+done
 
 rootfs301="$(ex_out "pct config 301 2>/dev/null | grep '^rootfs:'")"
 ex_assert_contains "the managed CT 301 is on the shared storage" "${rootfs301}" "nfs-lab"

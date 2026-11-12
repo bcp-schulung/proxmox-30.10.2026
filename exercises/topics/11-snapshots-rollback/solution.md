@@ -9,18 +9,18 @@
 ## 1. Take the snapshot
 
 ```bash
-qm snapshot 100 pre-update --description "before the Nordwind 2.4 release"
+qm snapshot 9201 pre-update --description "before the Nordwind 2.4 release"
 ```
 
 Verify:
 
 ```bash
-qm listsnapshot 100
+qm listsnapshot 9201
 ```
 
 ```
 ID      Name        Time                 Description
-100     pre-update  2026-11-10T09:15:23Z  before the Nordwind 2.4 release
+9201     pre-update  2026-11-10T09:15:23Z  before the Nordwind 2.4 release
 ```
 
 ### The guest agent is used automatically
@@ -34,7 +34,7 @@ pvesh get /cluster/log --limit 5
 
 ```json
 {
-  "cmd": "vzdump: <root@pam> snapshot 'pre-update' for VM 100",
+  "cmd": "vzdump: <root@pam> snapshot 'pre-update' for VM 9201",
   "endtime": 1762760123,
   "status": "OK"
 }
@@ -46,21 +46,21 @@ Without the agent, the snapshot is taken without the freeze, and the
 ## 2. Make a change
 
 ```bash
-qm guest exec 100 -- sh -c 'echo "release-2.4" > /etc/nordwind-version'
-qm guest exec 100 -- cat /etc/nordwind-version
+qm guest exec 9201 -- sh -c 'echo "release-2.4" > /etc/nordwind-version'
+qm guest exec 9201 -- cat /etc/nordwind-version
 # release-2.4
 ```
 
 Verify that the change is there:
 
 ```bash
-qm guest exec 100 -- test -f /etc/nordwind-version && echo "changed"
+qm guest exec 9201 -- test -f /etc/nordwind-version && echo "changed"
 ```
 
 ## 3. Roll back
 
 ```bash
-qm rollback 100 pre-update
+qm rollback 9201 pre-update
 ```
 
 The guest is stopped, the disk and the memory are restored, and the guest
@@ -69,7 +69,7 @@ starts again with exactly the state it had at the snapshot.
 Verify:
 
 ```bash
-qm guest exec 100 -- cat /etc/nordwind-version
+qm guest exec 9201 -- cat /etc/nordwind-version
 # cat: /etc/nordwind-version: No such file or directory
 ```
 
@@ -78,7 +78,7 @@ The change is gone.
 ### The disk-only rollback
 
 ```bash
-qm rollback 100 pre-update --mode snapshot
+qm rollback 9201 pre-update --mode snapshot
 ```
 
 This restores the disk and leaves the guest **stopped**. It is the right
@@ -88,8 +88,8 @@ forensic investigation, for example.
 ## 4. Delete the snapshot
 
 ```bash
-qm delsnapshot 100 pre-update
-qm listsnapshot 100
+qm delsnapshot 9201 pre-update
+qm listsnapshot 9201
 ```
 
 ### Why deleting matters
@@ -111,32 +111,32 @@ The rule:
 
 ```bash
 # Take the snapshot
-qm snapshot 100 pre-update --description "before the Nordwind 2.4 release"
+qm snapshot 9201 pre-update --description "before the Nordwind 2.4 release"
 
 # Make a change
-qm guest exec 100 -- sh -c 'echo "release-2.4" > /etc/nordwind-version'
-qm guest exec 100 -- cat /etc/nordwind-version
+qm guest exec 9201 -- sh -c 'echo "release-2.4" > /etc/nordwind-version'
+qm guest exec 9201 -- cat /etc/nordwind-version
 
 # Roll it back
-qm rollback 100 pre-update
-qm guest exec 100 -- cat /etc/nordwind-version      # the file is gone
+qm rollback 9201 pre-update
+qm guest exec 9201 -- cat /etc/nordwind-version      # the file is gone
 
 # Clean up
-qm delsnapshot 100 pre-update
+qm delsnapshot 9201 pre-update
 ```
 
 ## 6. The nested snapshots
 
 ```bash
-qm snapshot 100 pre-update
-qm snapshot 100 after-patch
-qm listsnapshot 100
+qm snapshot 9201 pre-update
+qm snapshot 9201 after-patch
+qm listsnapshot 9201
 ```
 
 ```
 ID      Name        Time
-100     after-patch 2026-11-10T09:20:00Z
-100     pre-update  2026-11-10T09:15:00Z
+9201     after-patch 2026-11-10T09:20:00Z
+9201     pre-update  2026-11-10T09:15:00Z
 ```
 
 Rolling back to `pre-update` discards everything after it, including

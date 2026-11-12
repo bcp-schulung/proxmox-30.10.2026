@@ -200,6 +200,157 @@ lsblk -ndo NAME,SERIAL | awk -v v=vol-0123 '$2==v {print $1}'
 
 ---
 
+## 4a. The guest templates
+
+Each Proxmox node carries its own copy of the Debian 13 cloud image and its own template.
+The templates are deliberately **per-node and node-local**: `local-lvm` is an LVM-thin
+pool on the node's own disk, not shared storage, so a template that lives on pve2 cannot
+be cloned onto pve1 without a copy.
+
+| Node | ISO | Template | Storage | Running guest |
+|---|---|---|---|---|
+| pve1 | `/var/lib/vz/template/iso/debian-13-generic-amd64.qcow2` | `9101` `debian13-tpl-pve1` | `local-lvm` | `9201` `debian13-run-pve1` |
+| pve2 | same path | `9102` `debian13-tpl-pve2` | `local-lvm` | `9202` `debian13-run-pve2` |
+| pve3 | same path | `9103` `debian13-tpl-pve3` | `local-lvm` | `9203` `debian13-run-pve3` |
+
+The image is verified against the upstream `SHA512SUMS` before it is used.
+
+### 4a.0 The starting state
+
+This is what the seminar starts from. `provision.sh --phase guests` brings the cluster to
+exactly this state, and every exercise builds on top of it.
+
+| Object | ID | Name | Node | State |
+|---|---|---|---|---|
+| Template | 9101 | `debian13-tpl-pve1` | pve1 | template, on `local-lvm` |
+| Template | 9102 | `debian13-tpl-pve2` | pve2 | template, on `local-lvm` |
+| Template | 9103 | `debian13-tpl-pve3` | pve3 | template, on `local-lvm` |
+| Guest | 9201 | `debian13-run-pve1` | pve1 | running, full clone of 9101 |
+| Guest | 9202 | `debian13-run-pve2` | pve2 | running, full clone of 9102 |
+| Guest | 9203 | `debian13-run-pve3` | pve3 | running, full clone of 9103 |
+| Container | 300 | `app01` | pve1 | unprivileged LXC, on `nfs-lab` |
+| Container | 301 | `db01` | pve2 | unprivileged LXC, on `nfs-lab` |
+
+The inventory lives in `config/default.env` and is the single source of truth for every
+script, exercise and check. The IDs are in the `91xx`/`92xx` range so that they cannot
+collide with the `100`-`102` and `9000`-`9002` range that an earlier version of the lab
+used.
+
+### 4a.0.1 Why one template per node
+
+There is no single shared template, and that is deliberate. The two kinds of clone have
+contradictory requirements:
+
+- A **full clone** can be moved to another node only when the source is on shared
+  storage. A template on the local storage of a node is refused with
+  `can't clone VM to node 'pve2' (VM uses local storage)`.
+- A **linked clone** is a snapshot of the template's disk, and a snapshot is only
+  possible on a storage that supports them. NFS does not:
+  `Linked clone feature is not supported for 'nfs-lab:9000/...'`.
+
+A template on the node's **own** `local-lvm` satisfies both constraints, so every node
+carries its own copy of the golden image and every guest is a full clone of the template
+on the node it runs on.
+
+### 4a.0.1 Only one provisioning run at a time
+
+Two runs against the same cluster destroy each other's work. One builds the templates
+while the other tears the guests down, and the cluster is left with neither - which is
+not a race that can be won, it is a race that has to be prevented.
+
+`provision.sh` and `scripts/build-seminar-guests.sh` therefore take a **run lock**
+before they touch anything:
+
+```
+.state/run.lock/          a directory - mkdir is atomic
+.state/run.lock/pid       the PID of the process that holds it
+.state/run.lock/name      what it is doing
+```
+
+A second run finds the lock, sees that the PID is alive, and refuses to start. A lock
+whose PID is gone is **stale** - it was left behind by a process that was killed - and
+it is taken over.
+
+For the same reason, `lab_destroy_guests` no longer destroys every VM it finds. It
+destroys the objects of the inventory in `config/default.env` and nothing else. A
+blanket teardown cannot tell a lab object from something an operator put on the
+cluster on purpose, and it took the templates down with it when it ran against a
+cluster that also held other work.
+
+### 4a.1 The image is an image, not an ISO
+
+`debian-13-generic-amd64.qcow2` is a **qcow2 disk image**, not an ISO. The `iso/`
+subdirectory of a directory storage only accepts real ISO extensions
+(`$PVE::Storage::ISO_EXT_RE_0`), so `local:iso/debian-13-generic-amd64.qcow2` is
+rejected by the volume-name parser:
+
+```
+unable to parse directory volume name 'iso/debian-13-generic-amd64.qcow2'
+```
+
+The image is therefore brought in with `qm importdisk`, which takes a plain path and
+converts the qcow2 into a raw volume on `local-lvm`:
+
+```
+qm importdisk <vmid> /var/lib/vz/template/iso/debian-13-generic-amd64.qcow2 local-lvm
+qm set <vmid> --scsi0 local-lvm:vm-<vmid>-disk-1,discard=on,iothread=1
+```
+
+The disk number that `importdisk` picks is **not** the one to assume. With an `efidisk0`
+already attached, the EFI vars volume takes `disk-0` and the imported OS disk lands on
+`disk-1`. Attaching `disk-0` to `scsi0` produces a template that boots a 4 MB EFI
+partition instead of Debian - the VM starts, shows no output, and never gets an address.
+Always read the volume name back out of `qm config` and confirm the size with
+`lvs` before booting.
+
+### 4a.2 The cloud image has no configuration of its own
+
+`debian-13-generic-amd64` is built for cloud-init. It ships **no** `/etc/network/interfaces`,
+**no** `systemd-networkd` drop-in, and **no** root password. Every bit of its
+configuration is supposed to arrive from a cloud-init data source at first boot.
+
+A template with no cloud-init drive therefore boots to a login prompt with **no network
+interface at all**. The templates get the following baked in instead, so that a plain
+clone works with nothing else:
+
+| Setting | Where | Why |
+|---|---|---|
+| DHCP on the virtio NIC | `/etc/systemd/network/10-eth.network` | The guest must get an address from the node's `dnsmasq` |
+| `systemd-networkd` + `systemd-resolved` enabled | `multi-user.target.wants` | The image has no other network manager |
+| `/etc/resolv.conf` -> `stub-resolv.conf` | symlink | The node's `dnsmasq` is the resolver |
+| Root SSH key + root password | `/root/.ssh/authorized_keys`, `chpasswd -R` | The stock image cannot be logged into at all |
+| `debian` user with password + key | `/home/debian` | The image's documented default user |
+| `PermitRootLogin yes` | `/etc/ssh/sshd_config.d/10-proxmox-lab.conf` | The image ships `PasswordAuthentication no` |
+| Empty `/etc/machine-id` | `/etc/machine-id` | Clones must not share a machine id |
+
+`chpasswd -R` and the `authorized_keys` files are written against the mounted
+filesystem, so the root password ends up hashed in `/etc/shadow` inside the image.
+
+### 4a.3 No access to the running VMs is needed
+
+**Starting a guest and verifying it is up does not require access to the guest.**
+Verification is done from the Proxmox side, on the node:
+
+| Question | Answered with |
+|---|---|
+| Is the VM running? | `qm status <vmid>` -> `status: running` |
+| Is the QEMU process alive? | `qm list` shows a PID; `ps -p <pid>` |
+| Did it boot? | QMP `screendump` -> a PPM of the console |
+| Is it on the network? | `/var/lib/misc/dnsmasq.leases` shows a lease for its MAC |
+
+This matters because the guest overlay is **not** reachable from outside the VPC. A guest
+holds an address in `10.10.10.0/24`, a private segment that only the three nodes can
+route to. There is no path from an operator laptop into that segment, so a check that
+requires SSH into the guest cannot be part of an automated verification - it would
+depend on where the check runs from.
+
+The consequence for automation: **do not treat a guest login as the success criterion.**
+A guest that boots to a login prompt and holds a DHCP lease is a working guest. Waiting
+for SSH to succeed inside the guest is a different test, it needs a reachable path to
+the overlay, and it makes the verification depend on the guest rather than on Proxmox.
+
+---
+
 ## 5. Security groups
 
 | Group | Rule | Purpose |

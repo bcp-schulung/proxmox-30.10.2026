@@ -32,7 +32,7 @@ API, and `curl` talks to it directly.
 
 ```bash
 pveum user token add automation@pve terraform --privsep 1
-pveum acl modify /vms/100 --tokens 'automation@pve!terraform' --roles VM-Operator
+pveum acl modify /vms/9201 --tokens 'automation@pve!terraform' --roles VM-Operator
 ```
 
 The token is the credential for the automation. It never expires, it can be
@@ -98,7 +98,7 @@ The format is `user@realm!tokenid=secret`.
 
 ```bash
 pvesh get    /cluster/resources
-pvesh create /cluster/backup --storage pbs-main --vmid 100 --schedule daily
+pvesh create /cluster/backup --storage pbs-main --vmid 9201 --schedule daily
 pvesh set    /cluster/firewall/options --enable 1
 pvesh delete /cluster/backup/backup-abcdef
 ```
@@ -114,7 +114,7 @@ provider "proxmox" {
   insecure = true
 }
 
-resource "proxmox_virtual_environment_vm" "web01" {
+resource "proxmox_virtual_environment_vm" "debian13-run-pve1" {
   node_name   = "pve1"
   vm_id       = 110
   name        = "web03"

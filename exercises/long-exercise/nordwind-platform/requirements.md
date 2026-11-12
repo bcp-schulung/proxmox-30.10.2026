@@ -121,12 +121,12 @@ more access than it needs.
 - [ ] A role `VM-Operator` exists with **exactly** these privileges:
       `VM.Console,VM.PowerMgmt,VM.Monitor`.
 - [ ] The role is granted on the web tier guests only - the ACL path is
-      `/vms/100` (and `/vms/101` if it exists), not `/`.
+      `/vms/9201` (and `/vms/9202` if it exists), not `/`.
 - [ ] `pveum user permissions jsmith@ad-corp` shows the granted privileges and
       nothing more.
 - [ ] An API token `automation@pve!terraform` exists **with privilege
       separation enabled**.
-- [ ] The token has its own ACL entry on `/vms/100` with the `VM-Operator`
+- [ ] The token has its own ACL entry on `/vms/9201` with the `VM-Operator`
       role.
 - [ ] The token's ACL is separate from the user's ACL - the token does not
       inherit the user's permissions.
@@ -143,15 +143,16 @@ more access than it needs.
 
 ### Requirements
 
-- [ ] A VM with the ID `9000` exists and is named `debian13-template`.
-- [ ] VM 9000 is marked as a **template** (`qm template 9000` was run).
+- [ ] A VM with the ID `9101` exists and is named `debian13-tpl-pve1`.
+- [ ] VM 9101 is marked as a **template** (`qm template 9101` was run).
 - [ ] The template has a cloud-init drive attached.
 - [ ] The template has the QEMU guest agent enabled
       (`--agent enabled=1,fstrim_cloned_disks=1`).
 - [ ] The template uses `virtio-scsi-single` as the disk controller.
-- [ ] The template lives on the shared storage `nfs-lab`.
+- [ ] The template lives on the node-local LVM-thin storage `local-lvm`.
+- [ ] `scsi0` is the 3 GB Debian disk, not the 4 MB EFI vars disk.
 - [ ] The template boots and the guest agent answers
-      (`qm guest cmd 9000 ping` succeeds while it is running).
+      (`qm guest cmd 9101 ping` succeeds while it is running).
 
 **Verification:** `../topics/07-template-cloning/exercise.sh`
 
@@ -163,10 +164,14 @@ more access than it needs.
 
 ### Requirements
 
-- [ ] VM `100` exists and is named `web01`.
-- [ ] VM `101` exists and is named `web02`.
-- [ ] Both are **full clones** of the template 9000.
-- [ ] Both live on the shared storage `nfs-lab`.
+- [ ] VM `9201` exists and is named `debian13-run-pve1`.
+- [ ] VM `9202` exists and is named `debian13-run-pve2`.
+- [ ] VM 9201 is a **full clone** of the template 9101 on pve1.
+- [ ] VM 9202 is a **full clone** of the template 9102 on pve2 - each guest
+      comes from the template of the node it runs on.
+- [ ] Both live on the node-local LVM-thin storage `local-lvm`.
+- [ ] Both have a disk of their own (`vm-<vmid>-disk-N`), not the base disk
+      of a template.
 - [ ] Both are configured with:
   - [ ] 2 vCPU (`--cores 2`)
   - [ ] 4096 MB memory
@@ -174,7 +179,7 @@ more access than it needs.
   - [ ] `virtio-scsi-single` disk controller
   - [ ] the guest agent enabled
   - [ ] `discard=on` and `iothread=1` on the disk
-- [ ] VM 100 and VM 101 are running.
+- [ ] VM 9201 and VM 9202 are running.
 - [ ] The guest agent answers in both guests.
 
 **Verification:** `../topics/08-vm-lifecycle/exercise.sh`
@@ -212,13 +217,13 @@ containers.
 
 ### Requirements
 
-- [ ] VM `102` exists, is named `web-test`.
-- [ ] VM 102 is a **linked clone** of template 9000.
-- [ ] VM 102 shares its base disk with the template (its `scsi0` refers to
-      `base-9000-disk-0`).
-- [ ] VM 102 has its own cloud-init drive with its own hostname.
-- [ ] VM 102 runs on the shared storage.
-- [ ] The template 9000 still exists and is still a template - a linked clone
+- [ ] VM `9203` exists, is named `debian13-run-pve3`.
+- [ ] VM 9203 is a **linked clone** of template 9101.
+- [ ] VM 9203 shares its base disk with the template (its `scsi0` refers to
+      `base-9101-disk-0`).
+- [ ] VM 9203 has its own cloud-init drive with its own hostname.
+- [ ] VM 9203 runs on the shared storage.
+- [ ] The template 9101 still exists and is still a template - a linked clone
       depends on it.
 
 **Verification:** `../topics/10-clone-strategies/exercise.sh`
@@ -231,7 +236,7 @@ containers.
 
 ### Requirements
 
-- [ ] VM 100 has a snapshot named `pre-update`.
+- [ ] VM 9201 has a snapshot named `pre-update`.
 - [ ] The snapshot carries a description.
 - [ ] A file that was created after the snapshot is gone after the rollback.
 - [ ] The snapshot can be deleted after the rollback.
@@ -248,9 +253,9 @@ containers.
 
 ### Requirements
 
-- [ ] VM 100 is running.
+- [ ] VM 9201 is running.
 - [ ] The migration target is `pve2`.
-- [ ] After the migration, VM 100 runs on `pve2`.
+- [ ] After the migration, VM 9201 runs on `pve2`.
 - [ ] The migration was **online** - the guest was running during the move.
 - [ ] The guest stayed reachable - the guest agent answers after the move.
 - [ ] The uptime of the guest was not reset by the migration (it kept running,
@@ -290,14 +295,14 @@ containers.
 ### Requirements
 
 - [ ] A backup job exists that targets `pbs-main`.
-- [ ] The job covers at least VM 100 and CT 301.
+- [ ] The job covers at least VM 9201 and CT 301.
 - [ ] The job runs in `snapshot` mode - it uses the guest agent.
 - [ ] The job is enabled and has a schedule.
 - [ ] The retention policy is `keep-daily 7`, `keep-weekly 4`,
       `keep-monthly 6`.
-- [ ] A manual backup of VM 100 exists in the datastore.
+- [ ] A manual backup of VM 9201 exists in the datastore.
 - [ ] A manual backup of CT 301 exists in the datastore.
-- [ ] The restore works: VM 100 is restored into a **new** VMID as a
+- [ ] The restore works: VM 9201 is restored into a **new** VMID as a
       `linked` clone and boots successfully.
 - [ ] The restored guest answers on the guest agent.
 
@@ -312,8 +317,8 @@ containers.
 ### Requirements
 
 - [ ] An HA group `prod-nodes` exists and contains all three nodes.
-- [ ] VM 100 is managed by HA (`ha-manager status` lists it).
-- [ ] VM 101 is managed by HA.
+- [ ] VM 9201 is managed by HA (`ha-manager status` lists it).
+- [ ] VM 9202 is managed by HA.
 - [ ] CT 301 is managed by HA.
 - [ ] The restart policy is set (`--max_restart` and `--max_relocate`).
 - [ ] The managed guests are on shared storage - HA refuses to manage a guest

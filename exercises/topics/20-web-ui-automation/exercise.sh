@@ -99,7 +99,7 @@ ex_assert_eq "the token has privilege separation enabled" "1" "${privsep}"
 
 token_acl="$(ex_out "pveum acl list 2>/dev/null | grep 'automation@pve!terraform'")"
 ex_assert_not_empty "the token has its own ACL entry" "${token_acl}"
-ex_assert_contains "the token ACL is scoped to /vms/100" "${token_acl}" "/vms/100"
+ex_assert_contains "the token ACL is scoped to /vms/9201" "${token_acl}" "/vms/9201"
 
 # The token must not be granted on the root path.
 token_root="$(ex_out "pveum acl list 2>/dev/null | grep -E '^/[[:space:]]' | grep 'automation@pve!terraform'")"
@@ -118,15 +118,15 @@ if [ -n "${TOKEN}" ]; then
     ex_assert_contains "the token can read the cluster resources" \
         "${tok_resources}" "vmid"
 
-    # The token can read the configuration of VM 100.
+    # The token can read the configuration of VM 9201.
     tok_vm="$(ex_out "curl -sk --max-time 10 \
         -H 'Authorization: PVEAPIToken=${TOKEN}' \
         https://localhost:8006/api2/json/nodes/\$(hostname)/qemu/100/config 2>/dev/null")"
-    ex_assert_not_contains "the token can read the configuration of VM 100" \
+    ex_assert_not_contains "the token can read the configuration of VM 9201" \
         "${tok_vm}" "Permission check failed"
 
     # The token CANNOT read the configuration of CT 301 - it is only
-    # scoped to /vms/100.
+    # scoped to /vms/9201.
     tok_ct="$(ex_out "curl -sk --max-time 10 \
         -H 'Authorization: PVEAPIToken=${TOKEN}' \
         https://localhost:8006/api2/json/nodes/\$(hostname)/lxc/301/config 2>/dev/null")"

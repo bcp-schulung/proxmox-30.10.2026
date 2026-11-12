@@ -34,8 +34,8 @@ ha-manager group prod-nodes
 ## 2. The resources
 
 ```bash
-ha-manager add vm:100 --group prod-nodes --max_restart 3 --max_relocate 2
-ha-manager add vm:101 --group prod-nodes --max_restart 3 --max_relocate 2
+ha-manager add vm:9201 --group prod-nodes --max_restart 3 --max_relocate 2
+ha-manager add vm:9202 --group prod-nodes --max_restart 3 --max_relocate 2
 ha-manager add ct:301 --group prod-nodes --max_restart 3 --max_relocate 2
 ```
 
@@ -47,8 +47,8 @@ ha-manager status
 
 ```
 Type     ID          Status    Last HA error
-vm       100         started
-vm       101         started
+vm       9201         started
+vm       9202         started
 ct       301         started
 node    pve1         active
 node    pve2         active
@@ -101,7 +101,7 @@ cat /etc/pve/ha/resources.cfg
 
 ```ini
 # resources.cfg
-vm: 100
+vm: 9201
     group prod-nodes
     max_restart 3
     max_relocate 2
@@ -200,8 +200,8 @@ guest.
 ha-manager add group prod-nodes --nodes pve1,pve2,pve3
 
 # The resources
-ha-manager add vm:100 --group prod-nodes --max_restart 3 --max_relocate 2
-ha-manager add vm:101 --group prod-nodes --max_restart 3 --max_relocate 2
+ha-manager add vm:9201 --group prod-nodes --max_restart 3 --max_relocate 2
+ha-manager add vm:9202 --group prod-nodes --max_restart 3 --max_relocate 2
 ha-manager add ct:301 --group prod-nodes --max_restart 3 --max_relocate 2
 
 # The status
@@ -217,8 +217,8 @@ ha-manager crm-command node-maintenance disable pve1
 | Symptom | Cause | Fix |
 |---|---|---|
 | `cannot add HA managed resource: storage is not shared` | The disk is on `local-lvm` | `qm move_disk` to the shared storage |
-| The status shows `ignored` | The resource was added with `--state ignored` | `ha-manager config --vm 100 --state started` |
-| The status shows `disabled` | The HA service does not touch the resource | `ha-manager config --vm 100 --state started` |
+| The status shows `ignored` | The resource was added with `--state ignored` | `ha-manager config --vm 9201 --state started` |
+| The status shows `disabled` | The HA service does not touch the resource | `ha-manager config --vm 9201 --state started` |
 | Nothing happens after a node failure | The cluster has no quorum | `pvecm status` |
 | The guests moved during a planned reboot | No maintenance mode | `ha-manager crm-command node-maintenance enable` |
 | The guest is on the wrong node | The resource has no group | `--group prod-nodes` |

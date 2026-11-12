@@ -6,25 +6,25 @@
 
 ## The forensic snapshot
 
-- [ ] VM 100 has a snapshot named `incident` - the evidence was preserved
+- [ ] VM 9201 has a snapshot named `incident` - the evidence was preserved
       **before** the repair.
 - [ ] The snapshot carries a description.
 
 ## The diagnosis
 
 - [ ] The guest was identified as the faulty layer - not the host. The
-      guest agent answering (`qm guest cmd 100 ping`) while the service
+      guest agent answering (`qm guest cmd 9201 ping`) while the service
       inside the guest is broken proves it.
 
 ## The repair
 
-- [ ] VM 100 is running.
+- [ ] VM 9201 is running.
 - [ ] The guest agent answers again.
 - [ ] The guest is functional - the guest agent service is active.
 
 ## The documentation
 
-- [ ] The task log records the actions of the incident on VM 100.
+- [ ] The task log records the actions of the incident on VM 9201.
 - [ ] The snapshot `incident` still exists - the evidence was not deleted
       during the repair.
 

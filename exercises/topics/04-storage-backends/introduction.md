@@ -58,7 +58,7 @@ to another node, the target node has to be able to see the disk. To restart
 a guest on another node after a failure, the same is true.
 
 ```bash
-qm migrate 100 pve2 --online
+qm migrate 9201 pve2 --online
 # migrate VMs with local disks are not supported
 ```
 

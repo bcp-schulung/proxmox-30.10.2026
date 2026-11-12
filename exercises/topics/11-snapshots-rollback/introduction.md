@@ -34,8 +34,8 @@ that moment and writes the differences into a separate file. A guest with a
 space.
 
 ```bash
-qm config 100 | grep scsi0
-# scsi0: nfs-lab:vm-100-disk-0,size=32G
+qm config 9201 | grep scsi0
+# scsi0: nfs-lab:vm-9201-disk-0,size=32G
 ```
 
 After a snapshot, the original disk becomes a thin disk with the
@@ -45,18 +45,18 @@ taken when it is used.
 ## 3. The commands
 
 ```bash
-qm snapshot 100 pre-update --description "Before the Nordwind release"
-qm listsnapshot 100
-qm rollback 100 pre-update
-qm delsnapshot 100 pre-update
+qm snapshot 9201 pre-update --description "Before the Nordwind release"
+qm listsnapshot 9201
+qm rollback 9201 pre-update
+qm delsnapshot 9201 pre-update
 ```
 
 ### The two types of rollback
 
 | Command | What it does | The guest |
 |---|---|---|
-| `qm rollback 100 pre-update` | Restores the disk **and** the memory | The guest is running again |
-| `qm rollback 100 pre-update --mode snapshot` | Restores the disk only | The guest is stopped |
+| `qm rollback 9201 pre-update` | Restores the disk **and** the memory | The guest is running again |
+| `qm rollback 9201 pre-update --mode snapshot` | Restores the disk only | The guest is stopped |
 
 The default is the full rollback, which restores the memory state. The guest
 comes back exactly as it was - same process, same uptime, same open files.
@@ -91,7 +91,7 @@ is a rollback point on the same storage as the original.
 
 ## 6. What you do
 
-1. Take a snapshot of VM 100 named `pre-update` with a description.
+1. Take a snapshot of VM 9201 named `pre-update` with a description.
 2. Make a change inside the guest.
 3. Roll the guest back.
 4. Verify that the change is gone.

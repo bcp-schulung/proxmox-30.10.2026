@@ -72,6 +72,71 @@ enable_error_trap() {
     trap 'on_error "${LINENO}" "${BASH_COMMAND}"' ERR
 }
 
+# --- The run lock -------------------------------------------------------------
+# Two provisioning runs against the same cluster fight each other. One
+# creates the templates while the other destroys them, and the cluster is
+# left with neither. That is not a race that can be won, it is a race that
+# has to be prevented.
+#
+# The lock is a directory. mkdir is atomic on every filesystem, so the
+# first process to create it owns the run. A stale lock - one left behind
+# by a process that was killed - is detected by the PID inside it: if that
+# process is gone, the lock is stale and it is taken over.
+LAB_LOCK_DIR="${LAB_LOCK_DIR:-${LAB_STATE_DIR:-.state}/run.lock}"
+
+# Take the run lock, or die.
+#
+# The name of the process that holds it is written inside, so that a
+# stale lock can be told apart from a live one.
+acquire_run_lock() {
+    local name="${1:-$(basename "$0")}"
+
+    mkdir -p "$(dirname "${LAB_LOCK_DIR}")" 2>/dev/null || true
+
+    if mkdir "${LAB_LOCK_DIR}" 2>/dev/null; then
+        printf '%s\n' "$$" > "${LAB_LOCK_DIR}/pid" 2>/dev/null || true
+        printf '%s\n' "${name}" > "${LAB_LOCK_DIR}/name" 2>/dev/null || true
+        trap 'release_run_lock' EXIT INT TERM
+        return 0
+    fi
+
+    # The lock exists. Is the process that holds it still alive?
+    local holder holder_name
+    holder="$(cat "${LAB_LOCK_DIR}/pid" 2>/dev/null || true)"
+    holder_name="$(cat "${LAB_LOCK_DIR}/name" 2>/dev/null || true)"
+
+    if [ -n "${holder}" ] && kill -0 "${holder}" 2>/dev/null; then
+        log_error "Another run (PID ${holder}, ${holder_name}) holds the lock ${LAB_LOCK_DIR}"
+        log_error "Wait for it to finish, or remove the lock if it is dead."
+        exit 1
+    fi
+
+    # The lock is stale: the process that took it is gone.
+    log_warn "Removing the stale lock ${LAB_LOCK_DIR} (PID ${holder:-unknown} is gone)"
+    rm -rf "${LAB_LOCK_DIR}" 2>/dev/null || true
+
+    if mkdir "${LAB_LOCK_DIR}" 2>/dev/null; then
+        printf '%s\n' "$$" > "${LAB_LOCK_DIR}/pid" 2>/dev/null || true
+        printf '%s\n' "${name}" > "${LAB_LOCK_DIR}/name" 2>/dev/null || true
+        trap 'release_run_lock' EXIT INT TERM
+        return 0
+    fi
+
+    log_error "Could not take the lock ${LAB_LOCK_DIR}"
+    exit 1
+}
+
+# Give the lock back.
+release_run_lock() {
+    [ -d "${LAB_LOCK_DIR}" ] || return 0
+    # Only remove the lock if this process still owns it.
+    local holder
+    holder="$(cat "${LAB_LOCK_DIR}/pid" 2>/dev/null || true)"
+    if [ -z "${holder}" ] || [ "${holder}" = "$$" ]; then
+        rm -rf "${LAB_LOCK_DIR}" 2>/dev/null || true
+    fi
+}
+
 # --- Prompts -----------------------------------------------------------------
 # confirm <question> [yes|no] - default answer when the second arg is omitted
 confirm() {

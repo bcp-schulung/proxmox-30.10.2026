@@ -457,8 +457,28 @@ systemctl daemon-reload
 systemctl enable pve-lab-netfilter >/dev/null 2>&1 || true
 
 # -----------------------------------------------------------------------------
-# 7. Routes to the overlay subnets of the other nodes
+# 7. The route of the own guest overlay, and the routes to the overlays of
+#    the other nodes.
 # -----------------------------------------------------------------------------
+# The own guest overlay has to be a DIRECT route over the bridge.
+#
+# ifupdown2 sometimes installs a route for the guest subnet that points
+# to the management gateway. The route wins over the connected route of
+# the bridge, and then the host cannot reach its own guests:
+#
+#   10.10.10.0/24 via 10.20.0.246 dev enp39s0
+#   10.10.10.0/24 dev vmbr0 scope link
+#
+# The guest then answers with "No route to host", although the DHCP
+# lease is there and the port is open.
+#
+# The route over the bridge is therefore set explicitly, and the wrong
+# route is removed.
+log "Setting the route of the guest overlay over vmbr0"
+ip route del "${GUEST_CIDR}" via "${MGMT_IP:-}" dev "${MGMT_IF}" 2>/dev/null || true
+ip route replace "${GUEST_CIDR}" dev vmbr0 scope link 2>/dev/null || \
+    warn "Could not set the route ${GUEST_CIDR} over vmbr0"
+
 if [ -n "${EXTRA_ROUTES}" ]; then
     log "Adding static routes to the overlay subnets of the other nodes"
     OLDIFS="$IFS"

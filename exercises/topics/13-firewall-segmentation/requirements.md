@@ -23,15 +23,15 @@
 
 ## The segmentation
 
-- [ ] The web tier VM 100 carries the VLAN tag `20`.
-- [ ] The web tier VM 101 carries the VLAN tag `20`.
+- [ ] The web tier VM 9201 carries the VLAN tag `20`.
+- [ ] The web tier VM 9202 carries the VLAN tag `20`.
 - [ ] The application tier CT 300 carries the VLAN tag `30`.
 - [ ] The database tier CT 301 carries the VLAN tag `40`.
 - [ ] `bridge vlan show` on the node reports the tagged VLANs.
 
 ## The guest level rules
 
-- [ ] VM 100 has its own firewall rules - the policy is not only at the
+- [ ] VM 9201 has its own firewall rules - the policy is not only at the
       datacenter level.
 - [ ] A rule lets the web tier reach the database tier.
 - [ ] A rule denies the database tier access to the web tier.
